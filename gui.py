@@ -18,46 +18,146 @@ class MathTutorApp:
         self.root = root
         self.root.title("Intelligent Math Teacher")
 
+        FONT       = ("Comic Sans MS", 14)
+        FONT_BOLD  = ("Comic Sans MS", 14, "bold")
+        FONT_TITLE = ("Comic Sans MS", 16, "bold")
+        BG_MAIN    = "#1a1a5e"
+        BG_QBOX    = "#0d0d3b"
+        BG_STEPS   = "#f0f8ff"
+        BG_OUTPUT  = "#ffffff"
+        FG_WHITE   = "#ffffff"
+        FG_BLACK   = "#000000"
+        FG_YELLOW  = "#ffd700"
+        BTN_SOLVE  = {"bg": "#28a745", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
+        BTN_NEXT   = {"bg": "#007bff", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
+        BTN_RESET  = {"bg": "#cc0000", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
+        BTN_HINT   = {"bg": "#ff8c00", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
+
+        root.configure(bg=BG_MAIN)
+        root.minsize(720, 700)
+
         self.student = StudentModel()
         self.planner = SymbolicPlanner()
+        self._question_num = 1
+        self._current_equation = ""
+        self._wp_equation_hint_shown = False
 
-        tk.Label(root, text="Enter Equation (e.g., 2*x+3=7):").pack()
-        self.eq_entry = tk.Entry(root, width=40)
-        self.eq_entry.pack()
-        self.eq_entry.insert(0, self.planner.current_equation())
+        tk.Label(root, text="Intelligent Math Teacher",
+                 font=("Comic Sans MS", 20, "bold"),
+                 bg=BG_MAIN, fg=FG_YELLOW).pack(pady=(14, 6))
 
-        tk.Label(root, text="Enter your solution steps (one per line):").pack()
-        self.steps_input = tk.Text(root, height=6, width=50)
-        self.steps_input.pack()
+        self.question_label_var = tk.StringVar(value="1. Question")
+        tk.Label(root, textvariable=self.question_label_var,
+                 font=FONT_BOLD, bg=BG_MAIN, fg=FG_YELLOW).pack(anchor=tk.W, padx=14, pady=(6, 0))
+
+        self.question_box = tk.Text(
+            root, height=5, width=66,
+            font=FONT, wrap=tk.WORD,
+            bg=BG_QBOX, fg=FG_WHITE,
+            insertbackground=FG_WHITE,
+            relief=tk.FLAT, bd=4
+        )
+        self.question_box.pack(padx=16, pady=(2, 8), fill=tk.X)
+        self._load_equation(self.planner.current_equation())
+
+        self.hint_var = tk.StringVar(value="")
+        tk.Label(
+            root, textvariable=self.hint_var,
+            font=FONT_BOLD, bg=BG_MAIN, fg=FG_YELLOW,
+            wraplength=660, justify=tk.LEFT
+        ).pack(anchor=tk.W, padx=16, pady=(0, 6))
+
+        tk.Label(root, text="Enter your solution steps (one per line):",
+                 font=FONT, bg=BG_MAIN, fg=FG_WHITE).pack()
+        self.steps_input = tk.Text(
+            root, height=6, width=66,
+            font=FONT, bg=BG_STEPS, fg=FG_BLACK,
+            insertbackground=FG_BLACK, insertontime=600, insertofftime=300,
+            relief=tk.GROOVE, bd=2
+        )
+        self.steps_input.pack(padx=16, pady=(2, 4), fill=tk.X)
 
         self.progress_var = tk.StringVar(value="")
-        self.progress_label = tk.Label(root, textvariable=self.progress_var)
+        self.progress_label = tk.Label(
+            root, textvariable=self.progress_var,
+            font=FONT, bg=BG_MAIN, fg="#90ee90"
+        )
         self.progress_label.pack()
 
         self.steps_input.bind("<Return>", self.on_step_entered)
 
-        btn_frame = tk.Frame(root)
+        btn_frame = tk.Frame(root, bg=BG_MAIN)
         btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Solve", command=self.solve).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Next", command=self.next_equation).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Solve",  command=self.solve,           **BTN_SOLVE).pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_frame, text="Next",   command=self.next_equation,   **BTN_NEXT ).pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_frame, text="Reset",  command=self.reset_questions, **BTN_RESET).pack(side=tk.LEFT, padx=6)
 
-        tk.Button(root, text="A* Hint", command=self.astar_hint).pack(pady=5)
+        tk.Button(root, text="A* Hint", command=self.astar_hint, **BTN_HINT).pack(pady=5)
 
-        self.output = tk.Text(root, height=15, width=60)
-        self.output.pack()
+        self.output = tk.Text(
+            root, height=15, width=66,
+            font=FONT, bg=BG_OUTPUT, fg=FG_BLACK,
+            relief=tk.GROOVE, bd=2
+        )
+        self.output.pack(padx=16, pady=(4, 16), fill=tk.X)
+
+    def _extract_equation(self, raw: str) -> str:
+        """Extract solver-compatible equation from a word problem or plain equation string."""
+        import re as _re
+        m = _re.search(r"\[equation:\s*(.+?)\]", raw)
+        if m:
+            return m.group(1).strip()
+        return raw.split("\n")[0].strip()
+
+    def _load_equation(self, raw: str):
+        """Load a new equation (plain or word problem) into the question box."""
+        eq = self._extract_equation(raw)
+        self._current_equation = eq
+
+        if "[equation:" in raw:
+            sentence = raw.split("\n[equation:")[0].strip()
+            display = sentence
+            self._is_word_problem = True
+        else:
+            display = eq
+            self._is_word_problem = False
+        self._wp_equation_hint_shown = False
+        if hasattr(self, "hint_var"):
+            self.hint_var.set("")
+
+        self.question_box.config(state=tk.NORMAL)
+        self.question_box.delete("1.0", tk.END)
+        self.question_box.insert(tk.END, display)
+        self.question_box.config(state=tk.DISABLED)
 
     def next_equation(self):
-        eq = self.planner.next_equation()
-        self.eq_entry.delete(0, tk.END)
-        self.eq_entry.insert(0, eq)
+        raw = self.planner.next_equation()
+        self._question_num += 1
+        self.question_label_var.set(f"{self._question_num}. Question")
+        self._load_equation(raw)
+        self.steps_input.delete("1.0", tk.END)
+        self.output.delete("1.0", tk.END)
+        self.progress_var.set("")
+
+    def reset_questions(self):
+        self.planner.reset()
+        self._question_num = 1
+        self.question_label_var.set("1. Question")
+        raw = self.planner.current_equation()
+        self._load_equation(raw)
         self.steps_input.delete("1.0", tk.END)
         self.output.delete("1.0", tk.END)
         self.progress_var.set("")
 
     def astar_hint(self):
-        equation = self.eq_entry.get().strip()
+        equation = self._current_equation.strip()
         if not equation or "=" not in equation:
-            messagebox.showerror("Error", "Invalid input.")
+            self.hint_var.set("Please enter a valid equation first.")
+            return
+
+        if getattr(self, "_is_word_problem", False) and not self._wp_equation_hint_shown:
+            self.hint_var.set(f"Hint 1 — Equation: {equation}")
+            self._wp_equation_hint_shown = True
             return
 
         raw_steps = self.steps_input.get("1.0", tk.END).strip()
@@ -84,17 +184,17 @@ class MathTutorApp:
             hint = None
 
         if not hint:
-            self.output.insert(tk.END, "\nA* Hint: No suggestion available.\n")
+            self.hint_var.set("A* Hint: No suggestion available.")
             return
 
-        self.output.insert(tk.END, f"\nA* Hint (next step): {hint}\n")
+        self.hint_var.set(f"A* Hint: {hint}")
 
     def on_step_entered(self, event):
         self.root.after(1, self.update_progress)
         return None
 
     def update_progress(self):
-        equation = self.eq_entry.get().strip()
+        equation = self._current_equation.strip()
         if not equation or "=" not in equation:
             self.progress_var.set("")
             return
@@ -109,6 +209,10 @@ class MathTutorApp:
 
         def _acceptable_solution_format(s):
             s = s.strip().replace(" ", "")
+            if re.fullmatch(r"[+-]?\d+", s):
+                return True
+            if re.fullmatch(r"[+-]?\d+\.\d+", s):
+                return True
             m = re.fullmatch(r"([+-]?\d+)/([+-]?\d+)", s)
             if m:
                 num = int(m.group(1))
@@ -116,8 +220,6 @@ class MathTutorApp:
                 if den == 0:
                     return False
                 return abs(num) < abs(den)
-            if re.fullmatch(r"[+-]?\d+\.\d{2,}", s):
-                return True
             return False
 
         def _last_solution_rhs_text(steps):
@@ -158,7 +260,7 @@ class MathTutorApp:
             self.progress_var.set("")
 
     def solve(self):
-        equation = self.eq_entry.get()
+        equation = self._current_equation
         student_steps = self.steps_input.get("1.0", tk.END).strip().split("\n")
 
         self.output.delete(1.0, tk.END)
@@ -197,10 +299,9 @@ class MathTutorApp:
             self.output.insert(tk.END, f"Hint: {feedback_hint}\n")
 
             self.output.insert(tk.END, f"\nDifficulty: {self.student.difficulty}\n")
-            self.output.insert(tk.END, f"Next Problem: {generate_problem(self.student.difficulty)}\n")
 
-        except:
-            messagebox.showerror("Error", "Invalid input.")
+        except Exception as e:
+            self.output.insert(tk.END, f"\nError: {e}\n")
 
 def run_app():
     root = tk.Tk()

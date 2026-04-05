@@ -8,17 +8,19 @@ explicit symbol operations (Newell & Simon, 1976).  Here, equations are built
 from a small vocabulary of named symbols and rewrite rules that compose them
 into well-formed linear expressions of increasing difficulty.
 
-Difficulty is parameterised by a DifficultyProfile (linear) or a
-QuadraticProfile (quadratic), which controls:
+Difficulty is parameterised by a DifficultyProfile (linear),
+WordProblemProfile (word problem), or QuadraticProfile (quadratic), which controls:
   - coefficient magnitude
   - constant magnitude
   - presence of x on both sides  (linear)
+  - word problem template type   (word problem)
   - factor root range and sign    (quadratic)
   - multi-step requirements (number of operations to solve)
 """
 
 import random
 import sympy as sp
+from word_problem_generator import build_word_problem
 
 x = sp.Symbol("x")
 
@@ -34,6 +36,9 @@ SYMBOL_TYPES = {
     "FACTOR_P":   None,   # root of first linear factor  (x + p)
     "FACTOR_Q":   None,   # root of second linear factor (x + q)
     "QUAD_CONST": None,   # optional RHS shift for quadratic
+    "WP_TEMPLATE": None, # word problem template type
+    "WP_NAME":    None,   # name slot for word problem
+    "WP_OBJECT":  None,   # object slot for word problem
 }
 
 # ---------------------------------------------------------------------------
@@ -58,6 +63,22 @@ class DifficultyProfile:
         self.allow_negative_const = allow_negative_const
         self.x_on_both_sides    = x_on_both_sides
         self.rhs_coeff_range    = rhs_coeff_range
+
+
+# ---------------------------------------------------------------------------
+# Word problem profile  (PSS rule template for word problems)
+# ---------------------------------------------------------------------------
+
+class WordProblemProfile:
+    """Rule template for word problems built by PSS slot-filling.
+
+    The PSS production rule picks a template type, then fills name, object,
+    and numeric slots to produce a sentence + solver-compatible equation.
+    """
+
+    def __init__(self, level: int, template_id: str):
+        self.level       = level
+        self.template_id = template_id  # e.g. "ADD_TOTAL"
 
 
 # ---------------------------------------------------------------------------
@@ -133,14 +154,20 @@ DIFFICULTY_PROFILES = [
         x_on_both_sides=True,
         rhs_coeff_range=(2, 5),
     ),
+    WordProblemProfile(level=6,  template_id="ADD_TOTAL"),
+    WordProblemProfile(level=7,  template_id="SUBTRACT_REMAINING"),
+    WordProblemProfile(level=8,  template_id="FIND_UNKNOWN_ADD"),
+    WordProblemProfile(level=9,  template_id="FIND_UNKNOWN_SUBTRACT"),
+    WordProblemProfile(level=10, template_id="MULTIPLY_TOTAL"),
+    WordProblemProfile(level=11, template_id="DIVIDE_SHARE"),
     QuadraticProfile(
-        level=6,
+        level=12,
         root_range=(1, 9),
         allow_negative_roots=False,
         nonzero_rhs=False,
     ),
     QuadraticProfile(
-        level=7,
+        level=13,
         root_range=(1, 9),
         allow_negative_roots=True,
         nonzero_rhs=True,
@@ -283,16 +310,45 @@ def _build_quadratic_equation(profile: QuadraticProfile, rng: random.Random) -> 
     return _fallback(profile.level)
 
 
+def _build_word_problem_equation(profile: WordProblemProfile, rng: random.Random) -> str:
+    """
+    PSS production rule for word problems.
+
+    Symbol instantiation sequence:
+      1. Bind WP_TEMPLATE  <- profile.template_id
+      2. Bind WP_NAME      <- random name from vocabulary
+      3. Bind WP_OBJECT    <- random object from vocabulary
+      4. Fill numeric slots A, B via SCHEMA_BUILDER
+      5. Render sentence via slot-fill template
+      6. Append solver-compatible equation string
+    """
+    try:
+        seed = rng.randint(0, 999999)
+        sentence, eq_str = build_word_problem(
+            template_id=profile.template_id,
+            seed=seed,
+        )
+        return f"{sentence}\n[equation: {eq_str}]"
+    except Exception:
+        return _fallback(profile.level)
+
+
 def _fallback(level: int) -> str:
     """Hardcoded safe fallbacks per difficulty level."""
     fallbacks = {
-        1: "2x + 3 = 11",
-        2: "3x - 4 = 14",
-        3: "-2x + 5 = 13",
-        4: "4x + 3 = 2x + 11",
-        5: "5x - 7 = 2x + 8",
-        6: "x^2 + 5x + 6 = 0",
-        7: "x^2 + 2x - 3 = 4",
+        1:  "2x + 3 = 11",
+        2:  "3x - 4 = 14",
+        3:  "-2x + 5 = 13",
+        4:  "4x + 3 = 2x + 11",
+        5:  "5x - 7 = 2x + 8",
+        6:  "John has 10 apples. They got 5 more. How many apples do they have in total?\n[equation: 10 + 5 = x]",
+        7:  "Maria had 20 pencils and gave away 8. How many pencils are left?\n[equation: 20 - 8 = x]",
+        8:  "Tom has 6 cookies. After receiving some more, they have 14. How many did they receive?\n[equation: 6 + x = 14]",
+        9:  "Emma had 15 books and gave some away, leaving 9. How many were given away?\n[equation: 15 - x = 9]",
+        10: "Sarah has 4 bags with 6 apples in each. How many apples in total?\n[equation: 4 * 6 = x]",
+        11: "Liam has 24 coins and shares them equally among 6 friends. How many does each friend get?\n[equation: 24 / 6 = x]",
+        12: "x^2 + 5x + 6 = 0",
+        13: "x^2 + 2x - 3 = 4",
     }
     return fallbacks.get(level, "2x + 1 = 9")
 
@@ -332,6 +388,8 @@ class SymbolicPlanner:
         """Route to the correct PSS production rule based on profile type."""
         if isinstance(profile, QuadraticProfile):
             return _build_quadratic_equation(profile, self._rng)
+        if isinstance(profile, WordProblemProfile):
+            return _build_word_problem_equation(profile, self._rng)
         return _build_equation(profile, self._rng)
 
     def next_equation(self) -> str:

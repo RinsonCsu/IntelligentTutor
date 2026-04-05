@@ -248,6 +248,10 @@ def expert_all_correct_feedback():
 def expert_is_acceptable_final_answer(s):
     import re
     s = s.strip().replace(" ", "")
+    if re.fullmatch(r"[+-]?\d+", s):
+        return True
+    if re.fullmatch(r"[+-]?\d+\.\d+", s):
+        return True
     m = re.fullmatch(r"([+-]?\d+)/([+-]?\d+)", s)
     if m:
         num = int(m.group(1))
@@ -255,6 +259,4 @@ def expert_is_acceptable_final_answer(s):
         if den == 0:
             return False
         return abs(num) < abs(den)
-    if re.fullmatch(r"[+-]?\d+\.\d{2,}", s):
-        return True
     return False

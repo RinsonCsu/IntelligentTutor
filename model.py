@@ -1,26 +1,5 @@
-import numpy as np
-
-try:
-    import tensorflow as tf
-except ImportError as e:
-    tf = None
-    _tf_import_error = e
-else:
-    _tf_import_error = None
-
-
-def _build_model():
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(1,)),
-            tf.keras.layers.Dense(8, activation="relu"),
-            tf.keras.layers.Dense(6),
-        ]
-    )
-    return model
-
-
-model = _build_model() if tf is not None else None
+import torch
+import torch.nn as nn
 
 error_labels = {
     0: "Correct",
@@ -31,13 +10,30 @@ error_labels = {
     5: "Invalid"
 }
 
-def classify_error(code):
-    if tf is None:
-        raise ImportError(
-            "TensorFlow is required for classify_error but is not installed. "
-            "Install it with: pip install tensorflow"
-        ) from _tf_import_error
+_NUM_CLASSES = len(error_labels)
 
-    x = np.array([[float(code)]], dtype=np.float32)
-    logits = model(x, training=False).numpy()
-    return int(np.argmax(logits, axis=1)[0])
+
+class _ErrorClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(1, 8),
+            nn.ReLU(),
+            nn.Linear(8, _NUM_CLASSES),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+torch.manual_seed(0)
+_model = _ErrorClassifier()
+_model.eval()
+
+
+def classify_error(code: int) -> int:
+    """Map an integer error code to an error label index using the PyTorch classifier."""
+    x = torch.tensor([[float(code)]], dtype=torch.float32)
+    with torch.no_grad():
+        logits = _model(x)
+    return int(torch.argmax(logits, dim=1).item())
