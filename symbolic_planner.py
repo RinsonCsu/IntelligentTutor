@@ -403,6 +403,15 @@ class SymbolicPlanner:
         self._history.append(eq)
         return eq
 
+    def repeat_level(self) -> str:
+        """
+        Stay at the current difficulty level and return a freshly generated
+        equation (used when the student answered incorrectly).
+        """
+        eq = self._dispatch(DIFFICULTY_PROFILES[self._level_index])
+        self._history.append(eq)
+        return eq
+
     def reset(self, seed: int = None):
         """Reset the planner to level 1 with a fresh random seed."""
         self._rng = random.Random(seed)

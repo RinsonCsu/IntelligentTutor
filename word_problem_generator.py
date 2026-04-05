@@ -1,23 +1,52 @@
 """
 word_problem_generator.py
 --------------------------
-Physical Symbol System (PSS) based word problem schema generator.
-
-Generates (schema_string, sentence) training pairs for fine-tuning T5-small.
+Neuro-symbolic word problem generator.
 
 The PSS owns all mathematical structure:
   - template type   (ADD, SUBTRACT, MULTIPLY, DIVIDE)
   - numeric slots   (A, B, answer)
   - semantic slots  (name, object, verb_phrase)
 
-The sentence side is produced by slot-filling a curated set of hand-written
-sentence templates — no neural network is involved here.  These pairs become
-the supervised training data for train_word_problem_model.py.
+If the fine-tuned T5 model exists in word_problem_model/, it is loaded once
+at import time and used to generate sentences from PSS schemas.  If not, the
+PSS slot-fill templates are used as a fallback.
+
+The equation string always comes from the PSS regardless of which path
+generates the sentence, guaranteeing mathematical correctness.
 """
 
 import random
 import json
 import os
+
+# ---------------------------------------------------------------------------
+# T5 model — loaded once at import time if word_problem_model/ exists
+# ---------------------------------------------------------------------------
+
+_MODEL_DIR = os.path.join(os.path.dirname(__file__), "word_problem_model")
+_t5_model     = None
+_t5_tokenizer = None
+_t5_device    = None
+
+def _load_t5_model():
+    global _t5_model, _t5_tokenizer, _t5_device
+    if not os.path.isdir(_MODEL_DIR):
+        return
+    try:
+        import torch
+        from transformers import T5ForConditionalGeneration, T5Tokenizer
+        _t5_tokenizer = T5Tokenizer.from_pretrained(_MODEL_DIR)
+        _t5_model     = T5ForConditionalGeneration.from_pretrained(_MODEL_DIR)
+        _t5_device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _t5_model.to(_t5_device)
+        _t5_model.eval()
+        print(f"[word_problem_generator] T5 model loaded from {_MODEL_DIR}")
+    except Exception as e:
+        print(f"[word_problem_generator] Could not load T5 model ({e}), using PSS templates.")
+        _t5_model = None
+
+_load_t5_model()
 
 # ---------------------------------------------------------------------------
 # PSS Symbol store — named slot vocabulary
@@ -242,9 +271,26 @@ def _equation_str(template_id: str, numeric: dict) -> str:
     return mapping.get(template_id, f"x = {ans}")
 
 
+def _t5_generate(schema_str: str) -> str:
+    """Use the fine-tuned T5 model to generate a sentence from a schema string."""
+    import torch
+    input_ids = _t5_tokenizer(
+        schema_str, max_length=128, return_tensors="pt"
+    ).input_ids.to(_t5_device)
+    with torch.no_grad():
+        out = _t5_model.generate(
+            input_ids, max_length=128, num_beams=4, early_stopping=True
+        )
+    return _t5_tokenizer.decode(out[0], skip_special_tokens=True)
+
+
 def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
     """
-    Generate one word problem using PSS slot-filling (no model required).
+    Generate one word problem.
+
+    If the fine-tuned T5 model is loaded, it generates the sentence.
+    Otherwise the PSS slot-fill template is used as fallback.
+    The equation string always comes from the PSS.
 
     Returns:
         (sentence, equation_str)
@@ -252,13 +298,23 @@ def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
         - equation_str : solver-compatible equation e.g. "10 + 5 = x"
     """
     rng = random.Random(seed)
-    tid = template_id or rng.choice(list(TEMPLATE_SCHEMAS.keys()))
+    tid      = template_id or rng.choice(list(TEMPLATE_SCHEMAS.keys()))
     numeric  = SCHEMA_BUILDERS[tid](rng)
     name     = rng.choice(NAMES)
     obj_s, obj_p = rng.choice(OBJECTS)
     tmpl     = rng.choice(TEMPLATE_SCHEMAS[tid]["sentence_templates"])
-    _, sentence = _fill_slots(tid, numeric, name, obj_s, obj_p, tmpl)
+    schema_str, pss_sentence = _fill_slots(tid, numeric, name, obj_s, obj_p, tmpl)
     eq_str   = _equation_str(tid, numeric)
+
+    if _t5_model is not None:
+        try:
+            sentence = _t5_generate(schema_str)
+        except Exception as e:
+            print(f"[word_problem_generator] T5 inference failed ({e}), using PSS.")
+            sentence = pss_sentence
+    else:
+        sentence = pss_sentence
+
     return sentence, eq_str
 
 

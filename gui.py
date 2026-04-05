@@ -21,17 +21,25 @@ class MathTutorApp:
         FONT       = ("Comic Sans MS", 14)
         FONT_BOLD  = ("Comic Sans MS", 14, "bold")
         FONT_TITLE = ("Comic Sans MS", 16, "bold")
-        BG_MAIN    = "#1a1a5e"
-        BG_QBOX    = "#0d0d3b"
+        BG_MAIN    = "#d0e8f5"
+        BG_QBOX    = "#1a4a7a"
         BG_STEPS   = "#f0f8ff"
         BG_OUTPUT  = "#ffffff"
         FG_WHITE   = "#ffffff"
         FG_BLACK   = "#000000"
-        FG_YELLOW  = "#ffd700"
-        BTN_SOLVE  = {"bg": "#28a745", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
-        BTN_NEXT   = {"bg": "#007bff", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
-        BTN_RESET  = {"bg": "#cc0000", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
-        BTN_HINT   = {"bg": "#ff8c00", "fg": FG_BLACK, "font": FONT_BOLD, "relief": tk.RAISED, "bd": 3}
+        FG_YELLOW  = "#1a1a5e"
+        BTN_DARK   = "#1a3a6e"
+        BTN_HOVER  = "#2a5aae"
+        BTN_DIS    = "#7a8a9e"
+
+        def _make_btn(parent, text, command, **kwargs):
+            lbl = tk.Label(parent, text=text, bg=BTN_DARK, fg=FG_WHITE,
+                           font=FONT_BOLD, padx=14, pady=7, cursor="hand2",
+                           relief=tk.FLAT, **kwargs)
+            lbl.bind("<Button-1>", lambda e: command() if lbl.cget("bg") != BTN_DIS else None)
+            lbl.bind("<Enter>",    lambda e: lbl.config(bg=BTN_HOVER) if lbl.cget("bg") != BTN_DIS else None)
+            lbl.bind("<Leave>",    lambda e: lbl.config(bg=BTN_DARK)  if lbl.cget("bg") != BTN_DIS else None)
+            return lbl
 
         root.configure(bg=BG_MAIN)
         root.minsize(720, 700)
@@ -41,14 +49,22 @@ class MathTutorApp:
         self._question_num = 1
         self._current_equation = ""
         self._wp_equation_hint_shown = False
+        self._correct_count = 0
+        self._total_count = 0
+        self._last_answer_correct = True
 
-        tk.Label(root, text="Intelligent Math Teacher",
+        header_frame = tk.Frame(root, bg=BG_MAIN)
+        header_frame.pack(fill=tk.X, padx=16, pady=(14, 6))
+        tk.Label(header_frame, text="Intelligent Math Teacher",
                  font=("Comic Sans MS", 20, "bold"),
-                 bg=BG_MAIN, fg=FG_YELLOW).pack(pady=(14, 6))
+                 bg=BG_MAIN, fg=FG_YELLOW).pack(side=tk.LEFT, expand=True)
+        self.score_var = tk.StringVar(value="Score: 0 / 0")
+        tk.Label(header_frame, textvariable=self.score_var,
+                 font=FONT_BOLD, bg=BG_MAIN, fg="#007a00").pack(side=tk.RIGHT)
 
         self.question_label_var = tk.StringVar(value="1. Question")
         tk.Label(root, textvariable=self.question_label_var,
-                 font=FONT_BOLD, bg=BG_MAIN, fg=FG_YELLOW).pack(anchor=tk.W, padx=14, pady=(6, 0))
+                 font=FONT_BOLD, bg=BG_MAIN, fg="#1a1a5e").pack(anchor=tk.W, padx=14, pady=(6, 0))
 
         self.question_box = tk.Text(
             root, height=5, width=66,
@@ -63,16 +79,16 @@ class MathTutorApp:
         self.hint_var = tk.StringVar(value="")
         tk.Label(
             root, textvariable=self.hint_var,
-            font=FONT_BOLD, bg=BG_MAIN, fg=FG_YELLOW,
+            font=FONT_BOLD, bg=BG_MAIN, fg="#1a7a1a",
             wraplength=660, justify=tk.LEFT
         ).pack(anchor=tk.W, padx=16, pady=(0, 6))
 
         tk.Label(root, text="Enter your solution steps (one per line):",
-                 font=FONT, bg=BG_MAIN, fg=FG_WHITE).pack()
+                 font=FONT_BOLD, bg=BG_MAIN, fg="#1a1a5e").pack(anchor=tk.W, padx=14)
         self.steps_input = tk.Text(
             root, height=6, width=66,
-            font=FONT, bg=BG_STEPS, fg=FG_BLACK,
-            insertbackground=FG_BLACK, insertontime=600, insertofftime=300,
+            font=("Comic Sans MS", 14), bg="#ffffff", fg="#000000",
+            insertbackground="#000000", insertontime=600, insertofftime=300,
             relief=tk.GROOVE, bd=2
         )
         self.steps_input.pack(padx=16, pady=(2, 4), fill=tk.X)
@@ -80,7 +96,7 @@ class MathTutorApp:
         self.progress_var = tk.StringVar(value="")
         self.progress_label = tk.Label(
             root, textvariable=self.progress_var,
-            font=FONT, bg=BG_MAIN, fg="#90ee90"
+            font=FONT, bg=BG_MAIN, fg="#007a00"
         )
         self.progress_label.pack()
 
@@ -88,18 +104,25 @@ class MathTutorApp:
 
         btn_frame = tk.Frame(root, bg=BG_MAIN)
         btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Solve",  command=self.solve,           **BTN_SOLVE).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text="Next",   command=self.next_equation,   **BTN_NEXT ).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text="Reset",  command=self.reset_questions, **BTN_RESET).pack(side=tk.LEFT, padx=6)
+        _make_btn(btn_frame, "Done",       self.solve).pack(side=tk.LEFT, padx=6)
+        self.btn_next = _make_btn(btn_frame, "Next", self.next_equation)
+        self.btn_next.config(bg=BTN_DIS)
+        self.btn_next.pack(side=tk.LEFT, padx=6)
+        _make_btn(btn_frame, "Start Over", self.reset_questions).pack(side=tk.LEFT, padx=6)
 
-        tk.Button(root, text="A* Hint", command=self.astar_hint, **BTN_HINT).pack(pady=5)
+        _make_btn(root, "Hint", self.astar_hint).pack(pady=5)
 
+        tk.Label(root, text="Debug Details",
+                 font=FONT_BOLD, bg=BG_MAIN, fg="#1a1a5e").pack(anchor=tk.W, padx=14, pady=(8, 0))
         self.output = tk.Text(
             root, height=15, width=66,
             font=FONT, bg=BG_OUTPUT, fg=FG_BLACK,
             relief=tk.GROOVE, bd=2
         )
         self.output.pack(padx=16, pady=(4, 16), fill=tk.X)
+        self.output.tag_configure("correct",  foreground="#007a00", font=("Comic Sans MS", 14, "bold"))
+        self.output.tag_configure("incorrect", foreground="#cc0000", font=("Comic Sans MS", 14, "bold"))
+        self.output.tag_configure("heading",   foreground="#1a1a5e", font=("Comic Sans MS", 13, "bold"))
 
     def _extract_equation(self, raw: str) -> str:
         """Extract solver-compatible equation from a word problem or plain equation string."""
@@ -130,24 +153,46 @@ class MathTutorApp:
         self.question_box.insert(tk.END, display)
         self.question_box.config(state=tk.DISABLED)
 
+    def _lock_steps(self):
+        self.steps_input.config(state=tk.DISABLED)
+
+    def _unlock_steps(self):
+        self.steps_input.config(state=tk.NORMAL)
+
+    def _update_score(self):
+        self.score_var.set(f"Score: {self._correct_count} / {self._total_count}")
+
     def next_equation(self):
-        raw = self.planner.next_equation()
+        if self._last_answer_correct:
+            raw = self.planner.next_equation()
+        else:
+            raw = self.planner.repeat_level()
+        self._last_answer_correct = True
         self._question_num += 1
         self.question_label_var.set(f"{self._question_num}. Question")
         self._load_equation(raw)
+        self._unlock_steps()
         self.steps_input.delete("1.0", tk.END)
         self.output.delete("1.0", tk.END)
         self.progress_var.set("")
+        self.progress_label.config(fg="#007a00")
+        self.btn_next.config(bg="#7a8a9e")
 
     def reset_questions(self):
         self.planner.reset()
         self._question_num = 1
+        self._correct_count = 0
+        self._total_count = 0
+        self._update_score()
         self.question_label_var.set("1. Question")
         raw = self.planner.current_equation()
         self._load_equation(raw)
+        self._unlock_steps()
         self.steps_input.delete("1.0", tk.END)
         self.output.delete("1.0", tk.END)
         self.progress_var.set("")
+        self.progress_label.config(fg="#007a00")
+        self.btn_next.config(bg="#7a8a9e")
 
     def astar_hint(self):
         equation = self._current_equation.strip()
@@ -207,6 +252,37 @@ class MathTutorApp:
         student_steps = raw.split("\n")
         error_index, result = validate_steps(student_steps, equation)
 
+        if error_index >= 0:
+            self.progress_label.config(fg="#cc0000")
+            self.progress_var.set(f"✘  Step {error_index+1}: {result}")
+            return
+
+        self.progress_label.config(fg="#007a00")
+        is_word_problem = getattr(self, "_is_word_problem", False)
+        def _student_has_equation_step(steps, eq):
+            import sympy as sp
+            from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application, convert_xor
+            tf = standard_transformations + (convert_xor, implicit_multiplication_application,)
+            try:
+                eq_parsed = sp.Eq(parse_expr(eq.split("=")[0], transformations=tf),
+                                  parse_expr(eq.split("=")[1], transformations=tf))
+            except Exception:
+                return False
+            for s in steps:
+                s = s.strip()
+                if not s or "=" not in s:
+                    continue
+                try:
+                    step_parsed = sp.Eq(parse_expr(s.split("=")[0], transformations=tf),
+                                        parse_expr(s.split("=")[1], transformations=tf))
+                    if sp.simplify(eq_parsed.lhs - step_parsed.lhs) == 0 and sp.simplify(eq_parsed.rhs - step_parsed.rhs) == 0:
+                        return True
+                    if sp.simplify(eq_parsed.lhs - step_parsed.rhs) == 0 and sp.simplify(eq_parsed.rhs - step_parsed.lhs) == 0:
+                        return True
+                except Exception:
+                    continue
+            return False
+
         def _acceptable_solution_format(s):
             s = s.strip().replace(" ", "")
             if re.fullmatch(r"[+-]?\d+", s):
@@ -238,19 +314,39 @@ class MathTutorApp:
                         return left
             return None
 
+        wp_bonus = 1 if is_word_problem else 0
+        eq_step_done = _student_has_equation_step(student_steps, equation) if is_word_problem else False
+
         if error_index == -2:
-            self.progress_var.set(result)
+            raw_result = result
+            if is_word_problem:
+                import re as _re
+                m = _re.search(r"(\d+)%", raw_result)
+                if m:
+                    inner_pct = int(m.group(1))
+                    eq_credit = 1 if eq_step_done else 0
+                    total_steps = 100 + wp_bonus * 100
+                    adjusted = int((inner_pct + eq_credit * 100) / (1 + wp_bonus))
+                    adjusted = max(0, min(99, adjusted))
+                    self.progress_var.set(f"Valid so far: about {adjusted}% of the way there")
+                else:
+                    self.progress_var.set(raw_result)
+            else:
+                self.progress_var.set(raw_result)
         elif error_index == -1:
             rhs_text = _last_solution_rhs_text(student_steps)
             if rhs_text is not None and _acceptable_solution_format(rhs_text):
-                self.progress_var.set("100% complete")
+                if is_word_problem and not eq_step_done:
+                    self.progress_var.set("Valid so far: about 50% of the way there")
+                else:
+                    self.progress_var.set("100% complete")
             else:
                 start_steps, cur_steps = estimate_linear_steps_remaining(equation, f"x={rhs_text}" if rhs_text else "x=0")
                 if start_steps is None or cur_steps is None:
                     self.progress_var.set("Almost complete: format final answer as a decimal (>= 2 dp) or a proper fraction")
                 else:
-                    total_steps = start_steps + 1
-                    remaining_steps = cur_steps + 1
+                    total_steps = start_steps + 1 + wp_bonus
+                    remaining_steps = cur_steps + 1 + (0 if eq_step_done else wp_bonus)
                     pct = int(100 * (total_steps - remaining_steps) / max(1, total_steps))
                     pct = max(0, min(99, pct))
                     self.progress_var.set(
@@ -260,6 +356,9 @@ class MathTutorApp:
             self.progress_var.set("")
 
     def solve(self):
+        self.btn_next.config(bg="#1a3a6e")
+        self._lock_steps()
+        self._total_count += 1
         equation = self._current_equation
         student_steps = self.steps_input.get("1.0", tk.END).strip().split("\n")
 
@@ -272,32 +371,43 @@ class MathTutorApp:
             for step in steps:
                 self.output.insert(tk.END, step + "\n")
 
-            error_index, result = validate_steps(student_steps, equation)
+            has_steps = any(s.strip() for s in student_steps)
 
-            if error_index == -1:
-                self.output.insert(tk.END, "\nAll steps correct!\n")
-                self.student.update(True)
-                error_code = 0
-                predicted = 0
-                feedback_hint = generate_hint(predicted)
-                feedback_label = error_labels[predicted]
-            elif error_index == -2:
-                self.output.insert(tk.END, f"\n{result}\n")
+            if not has_steps:
+                self.progress_label.config(fg="#cc0000")
+                self.progress_var.set("✘  No steps entered")
                 self.student.update(False)
-                feedback_label = "In Progress"
-                feedback_hint = result
+                self._last_answer_correct = False
+                self.output.insert(tk.END, "\nNo steps entered.\n", "incorrect")
+                self.output.insert(tk.END, "\nHint: Enter your working steps above and click Done to check them.\n")
             else:
-                self.output.insert(tk.END, f"Error at Step {error_index+1}: {result}\n")
-                self.student.update(False)
-                error_code = 3
-                predicted = classify_error(error_code)
-                feedback_label = error_labels[predicted]
-                feedback_hint = generate_hint(predicted)
+                error_index, result = validate_steps(student_steps, equation)
 
-            self.output.insert(tk.END, "\n=== Feedback ===\n")
-            self.output.insert(tk.END, f"Detected: {feedback_label}\n")
-            self.output.insert(tk.END, f"Hint: {feedback_hint}\n")
+                if error_index == -1:
+                    self._correct_count += 1
+                    self.student.update(True)
+                    self._last_answer_correct = True
+                    self.progress_label.config(fg="#007a00")
+                    self.progress_var.set("✔  All steps correct!")
+                    self.output.insert(tk.END, "\n✔  All steps correct!\n")
+                    self.output.insert(tk.END, "Hint: Well done! Click Next for the next question.\n")
+                elif error_index == -2:
+                    self.student.update(False)
+                    self._last_answer_correct = False
+                    clean = result.replace("Valid so far: ", "").replace("about ", "")
+                    self.progress_label.config(fg="#cc0000")
+                    self.progress_var.set(f"◑  Incomplete — {clean}")
+                    self.output.insert(tk.END, f"\n◑  Incomplete — {clean}\n", "incorrect")
+                    self.output.insert(tk.END, "Hint: Keep going — finish solving for x.\n")
+                else:
+                    self.student.update(False)
+                    self._last_answer_correct = False
+                    self.progress_label.config(fg="#cc0000")
+                    self.progress_var.set(f"✘  Incorrect at Step {error_index+1}")
+                    self.output.insert(tk.END, f"\n✘  Incorrect at Step {error_index+1}\n", "incorrect")
+                    self.output.insert(tk.END, f"Reason: {result}\n")
 
+            self._update_score()
             self.output.insert(tk.END, f"\nDifficulty: {self.student.difficulty}\n")
 
         except Exception as e:

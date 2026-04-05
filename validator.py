@@ -24,11 +24,19 @@ transformations = standard_transformations + (convert_xor, implicit_multiplicati
 def _parse(s):
     return parse_expr(s, transformations=transformations)
 
-def _extract_solution_value(eq):
+_PLAIN_NUMBER_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
+
+def _is_plain_number_str(s: str) -> bool:
+    """True only if s is a bare numeric literal — no operators or expressions."""
+    return bool(_PLAIN_NUMBER_RE.match(s.strip().replace(" ", "")))
+
+def _extract_solution_value(eq, lhs_str: str = "", rhs_str: str = ""):
     if eq.lhs == x and x not in getattr(eq.rhs, "free_symbols", set()):
-        return eq.rhs
+        if _is_plain_number_str(rhs_str):
+            return sp.simplify(eq.rhs)
     if eq.rhs == x and x not in getattr(eq.lhs, "free_symbols", set()):
-        return eq.lhs
+        if _is_plain_number_str(lhs_str):
+            return sp.simplify(eq.lhs)
     return None
 
 def _estimate_linear_steps(eq):
@@ -162,11 +170,12 @@ def validate_steps(student_steps, equation):
                     break
                 l, r = clause.split("=")
                 eq_clause = sp.Eq(_parse(l), _parse(r))
-                sol_value = _extract_solution_value(eq_clause)
+                sol_value = _extract_solution_value(eq_clause, lhs_str=l, rhs_str=r)
                 if sol_value is None:
                     all_clauses_are_solutions = False
                     break
-                if not _is_acceptable_final_answer_text(r):
+                sol_text = l if _is_plain_number_str(l) else r
+                if not _is_acceptable_final_answer_text(sol_text):
                     all_clauses_have_acceptable_format = False
                 if not _validate_solution_value(sol_value):
                     return i, expert_incorrect_solution_feedback()
