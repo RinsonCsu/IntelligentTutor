@@ -156,6 +156,16 @@ def diagnose_step_error(equation_text: str, prev_step_text: str, current_step_te
     if validator_message.startswith("Missing '") or "Missing '=" in validator_message:
         return ("Invalid", "Rule: MISSING_EQUALS. Each step must contain exactly one '='.")
 
+    if "MULTIPLE_EQUALS" in validator_message:
+        import re as _re
+        if _re.search(r"\bor\b", current_step_text, flags=_re.IGNORECASE):
+            return (
+                "Invalid",
+                "Rule: ZERO_PRODUCT_SPLIT. When writing two equations from a factored form, "
+                "write each as a separate equation: e.g. 'x + 3 = 0 or x + 1 = 0'.",
+            )
+        return ("Invalid", "Rule: MULTIPLE_EQUALS. Each step must contain exactly one '='.")
+
     if original is None or prev_eq is None or cur_eq is None:
         return None
 

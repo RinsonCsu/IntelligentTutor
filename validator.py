@@ -180,6 +180,48 @@ def validate_steps(student_steps, equation):
                 msg = expert_solution_format_feedback(rhs_texts)
                 return -2, msg or "Correct solutions, but format final answers as a decimal (>= 2 dp) or a proper fraction"
 
+            if len(clauses) > 1:
+                clause_eqs = []
+                for clause in clauses:
+                    if clause.count("=") != 1:
+                        return i, expert_multiple_equals_feedback()
+                    cl, cr = clause.split("=")
+                    try:
+                        clause_eqs.append(sp.Eq(_parse(cl), _parse(cr)))
+                    except Exception:
+                        return i, expert_multiple_equals_feedback()
+                prev_expr = sp.simplify(prev.lhs - prev.rhs)
+                try:
+                    prev_factors = sp.factor(prev_expr)
+                    if isinstance(prev_factors, sp.Mul):
+                        factor_list = [f for f in prev_factors.args if x in getattr(f, "free_symbols", set())]
+                    else:
+                        factor_list = [prev_factors] if x in getattr(prev_factors, "free_symbols", set()) else []
+                except Exception:
+                    factor_list = []
+                valid_split = False
+                if factor_list and len(factor_list) == len(clause_eqs):
+                    matched = [False] * len(factor_list)
+                    all_matched = True
+                    for ceq in clause_eqs:
+                        ceq_expr = sp.simplify(ceq.lhs - ceq.rhs)
+                        found = False
+                        for fi, fac in enumerate(factor_list):
+                            if not matched[fi]:
+                                ratio = sp.simplify(fac / ceq_expr) if ceq_expr != 0 else None
+                                if ratio is not None and getattr(ratio, "free_symbols", set()) == set() and ratio != 0:
+                                    matched[fi] = True
+                                    found = True
+                                    break
+                        if not found:
+                            all_matched = False
+                            break
+                    valid_split = all_matched
+                if not valid_split:
+                    return i, expert_not_equivalent_feedback()
+                prev = clause_eqs[-1]
+                continue
+
             if step.count("=") != 1:
                 return i, expert_multiple_equals_feedback()
 

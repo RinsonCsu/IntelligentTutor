@@ -11,6 +11,7 @@ from validator import validate_steps, estimate_linear_steps_remaining
 from model import classify_error, error_labels
 from hints import generate_hint
 from adaptive import StudentModel, generate_problem
+from symbolic_planner import SymbolicPlanner
 
 class MathTutorApp:
     def __init__(self, root):
@@ -18,10 +19,12 @@ class MathTutorApp:
         self.root.title("Intelligent Math Teacher")
 
         self.student = StudentModel()
+        self.planner = SymbolicPlanner()
 
         tk.Label(root, text="Enter Equation (e.g., 2*x+3=7):").pack()
         self.eq_entry = tk.Entry(root, width=40)
         self.eq_entry.pack()
+        self.eq_entry.insert(0, self.planner.current_equation())
 
         tk.Label(root, text="Enter your solution steps (one per line):").pack()
         self.steps_input = tk.Text(root, height=6, width=50)
@@ -33,12 +36,23 @@ class MathTutorApp:
 
         self.steps_input.bind("<Return>", self.on_step_entered)
 
-        tk.Button(root, text="Solve", command=self.solve).pack(pady=10)
+        btn_frame = tk.Frame(root)
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text="Solve", command=self.solve).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Next", command=self.next_equation).pack(side=tk.LEFT, padx=5)
 
         tk.Button(root, text="A* Hint", command=self.astar_hint).pack(pady=5)
 
         self.output = tk.Text(root, height=15, width=60)
         self.output.pack()
+
+    def next_equation(self):
+        eq = self.planner.next_equation()
+        self.eq_entry.delete(0, tk.END)
+        self.eq_entry.insert(0, eq)
+        self.steps_input.delete("1.0", tk.END)
+        self.output.delete("1.0", tk.END)
+        self.progress_var.set("")
 
     def astar_hint(self):
         equation = self.eq_entry.get().strip()
