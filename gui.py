@@ -1,36 +1,61 @@
 import tkinter as tk
-from tkinter import messagebox
 import re
+import sympy as sp
+from sympy.parsing.sympy_parser import (
+    parse_expr, standard_transformations,
+    implicit_multiplication_application, convert_xor,
+)
 from solver import (
     solve_equation_steps,
     astar_next_step_isolate,
     astar_next_step_complete_square,
     astar_next_step_factor_quadratic,
 )
-from validator import validate_steps, estimate_linear_steps_remaining
-from model import classify_error, error_labels
-from hints import generate_hint
-from adaptive import StudentModel, generate_problem
+from validator import validate_steps
+from adaptive import StudentModel
 from symbolic_planner import SymbolicPlanner
+
+_SP_TF = standard_transformations + (convert_xor, implicit_multiplication_application,)
+
+def _student_has_equation_step(steps, eq):
+    """Return True if any student step is symbolically equivalent to eq."""
+    try:
+        eq_parsed = sp.Eq(parse_expr(eq.split("=")[0], transformations=_SP_TF),
+                          parse_expr(eq.split("=")[1], transformations=_SP_TF))
+    except Exception:
+        return False
+    for s in steps:
+        s = s.strip()
+        if not s or "=" not in s:
+            continue
+        try:
+            sp_parsed = sp.Eq(parse_expr(s.split("=")[0], transformations=_SP_TF),
+                              parse_expr(s.split("=")[1], transformations=_SP_TF))
+            if (sp.simplify(eq_parsed.lhs - sp_parsed.lhs) == 0 and
+                    sp.simplify(eq_parsed.rhs - sp_parsed.rhs) == 0):
+                return True
+            if (sp.simplify(eq_parsed.lhs - sp_parsed.rhs) == 0 and
+                    sp.simplify(eq_parsed.rhs - sp_parsed.lhs) == 0):
+                return True
+        except Exception:
+            continue
+    return False
 
 class MathTutorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Intelligent Math Teacher")
 
-        FONT       = ("Comic Sans MS", 14)
-        FONT_BOLD  = ("Comic Sans MS", 14, "bold")
-        FONT_TITLE = ("Comic Sans MS", 16, "bold")
-        BG_MAIN    = "#d0e8f5"
-        BG_QBOX    = "#1a4a7a"
-        BG_STEPS   = "#f0f8ff"
-        BG_OUTPUT  = "#ffffff"
-        FG_WHITE   = "#ffffff"
-        FG_BLACK   = "#000000"
-        FG_YELLOW  = "#1a1a5e"
-        BTN_DARK   = "#1a3a6e"
-        BTN_HOVER  = "#2a5aae"
-        BTN_DIS    = "#7a8a9e"
+        FONT      = ("Comic Sans MS", 14)
+        FONT_BOLD = ("Comic Sans MS", 14, "bold")
+        BG_MAIN   = "#d0e8f5"
+        BG_QBOX   = "#1a4a7a"
+        BG_OUTPUT = "#ffffff"
+        FG_WHITE  = "#ffffff"
+        FG_BLACK  = "#000000"
+        BTN_DARK  = "#1a3a6e"
+        BTN_HOVER = "#2a5aae"
+        BTN_DIS   = "#7a8a9e"
 
         def _make_btn(parent, text, command, **kwargs):
             lbl = tk.Label(parent, text=text, bg=BTN_DARK, fg=FG_WHITE,
@@ -57,7 +82,7 @@ class MathTutorApp:
         header_frame.pack(fill=tk.X, padx=16, pady=(14, 6))
         tk.Label(header_frame, text="Intelligent Math Teacher",
                  font=("Comic Sans MS", 20, "bold"),
-                 bg=BG_MAIN, fg=FG_YELLOW).pack(side=tk.LEFT, expand=True)
+                 bg=BG_MAIN, fg="#1a1a5e").pack(side=tk.LEFT, expand=True)
         self.score_var = tk.StringVar(value="Score: 0 / 0")
         tk.Label(header_frame, textvariable=self.score_var,
                  font=FONT_BOLD, bg=BG_MAIN, fg="#007a00").pack(side=tk.RIGHT)
@@ -259,29 +284,6 @@ class MathTutorApp:
 
         self.progress_label.config(fg="#007a00")
         is_word_problem = getattr(self, "_is_word_problem", False)
-        def _student_has_equation_step(steps, eq):
-            import sympy as sp
-            from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application, convert_xor
-            tf = standard_transformations + (convert_xor, implicit_multiplication_application,)
-            try:
-                eq_parsed = sp.Eq(parse_expr(eq.split("=")[0], transformations=tf),
-                                  parse_expr(eq.split("=")[1], transformations=tf))
-            except Exception:
-                return False
-            for s in steps:
-                s = s.strip()
-                if not s or "=" not in s:
-                    continue
-                try:
-                    step_parsed = sp.Eq(parse_expr(s.split("=")[0], transformations=tf),
-                                        parse_expr(s.split("=")[1], transformations=tf))
-                    if sp.simplify(eq_parsed.lhs - step_parsed.lhs) == 0 and sp.simplify(eq_parsed.rhs - step_parsed.rhs) == 0:
-                        return True
-                    if sp.simplify(eq_parsed.lhs - step_parsed.rhs) == 0 and sp.simplify(eq_parsed.rhs - step_parsed.lhs) == 0:
-                        return True
-                except Exception:
-                    continue
-            return False
 
         def _acceptable_solution_format(s):
             s = s.strip().replace(" ", "")
@@ -317,41 +319,25 @@ class MathTutorApp:
         wp_bonus = 1 if is_word_problem else 0
         eq_step_done = _student_has_equation_step(student_steps, equation) if is_word_problem else False
 
-        if error_index == -2:
-            raw_result = result
+        rhs_text = _last_solution_rhs_text(student_steps)
+        has_final_answer = rhs_text is not None and _acceptable_solution_format(rhs_text)
+
+        if error_index == -2 or error_index == -1:
             if is_word_problem:
-                import re as _re
-                m = _re.search(r"(\d+)%", raw_result)
-                if m:
-                    inner_pct = int(m.group(1))
-                    eq_credit = 1 if eq_step_done else 0
-                    total_steps = 100 + wp_bonus * 100
-                    adjusted = int((inner_pct + eq_credit * 100) / (1 + wp_bonus))
-                    adjusted = max(0, min(99, adjusted))
-                    self.progress_var.set(f"Valid so far: about {adjusted}% of the way there")
-                else:
-                    self.progress_var.set(raw_result)
-            else:
-                self.progress_var.set(raw_result)
-        elif error_index == -1:
-            rhs_text = _last_solution_rhs_text(student_steps)
-            if rhs_text is not None and _acceptable_solution_format(rhs_text):
-                if is_word_problem and not eq_step_done:
-                    self.progress_var.set("Valid so far: about 50% of the way there")
-                else:
+                if has_final_answer:
                     self.progress_var.set("100% complete")
-            else:
-                start_steps, cur_steps = estimate_linear_steps_remaining(equation, f"x={rhs_text}" if rhs_text else "x=0")
-                if start_steps is None or cur_steps is None:
-                    self.progress_var.set("Almost complete: format final answer as a decimal (>= 2 dp) or a proper fraction")
+                elif eq_step_done:
+                    self.progress_var.set("50% complete — now write the final answer")
                 else:
-                    total_steps = start_steps + 1 + wp_bonus
-                    remaining_steps = cur_steps + 1 + (0 if eq_step_done else wp_bonus)
-                    pct = int(100 * (total_steps - remaining_steps) / max(1, total_steps))
-                    pct = max(0, min(99, pct))
-                    self.progress_var.set(
-                        f"{pct}% complete: format final answer as a decimal (>= 2 dp) or a proper fraction"
-                    )
+                    self.progress_var.set("In progress")
+            elif error_index == -1:
+                if has_final_answer:
+                    self.progress_var.set("100% complete")
+                else:
+                    self.progress_var.set("Almost complete: format final answer as a decimal (>= 2 dp) or a proper fraction")
+            else:
+                capped = re.sub(r"(\d+)%", lambda m: f"{min(int(m.group(1)), 99)}%", result)
+                self.progress_var.set(capped)
         else:
             self.progress_var.set("")
 

@@ -44,9 +44,9 @@ def _estimate_linear_steps(eq):
     rhs_s = sp.simplify(eq.rhs)
 
     if lhs_s == x and x not in getattr(rhs_s, "free_symbols", set()):
-        return 0
+        return 0 if rhs_s.is_Atom else 1
     if rhs_s == x and x not in getattr(lhs_s, "free_symbols", set()):
-        return 0
+        return 0 if lhs_s.is_Atom else 1
 
     def _lin_parts(side):
         try:
@@ -134,6 +134,7 @@ def validate_steps(student_steps, equation):
     lhs, rhs = equation.split("=")
     original = sp.Eq(_parse(lhs), _parse(rhs))
     prev = original
+    last_step_str = ""
     found_solution_line = False
 
     def _validate_solution_value(sol_value):
@@ -143,15 +144,38 @@ def validate_steps(student_steps, equation):
     def _is_acceptable_final_answer_text(s):
         return expert_is_acceptable_final_answer(s)
 
-    def _progress_percent(current_eq):
-        start = _estimate_linear_steps(original)
-        cur = _estimate_linear_steps(current_eq)
-        if start is None or cur is None:
+    def _total_expected_lines():
+        """Estimate total lines a student needs to write."""
+        ops = _estimate_linear_steps(original)
+        if ops is None:
             return None
-        if start <= 0:
-            return 100
-        pct = int(round(100 * (start - cur) / start))
-        return max(0, min(100, pct))
+        lhs_s = sp.simplify(original.lhs)
+        rhs_s = sp.simplify(original.rhs)
+        try:
+            lp = sp.Poly(lhs_s, x)
+            rp = sp.Poly(rhs_s, x)
+            a_l = lp.coeffs()[0] if lp.degree() == 1 else sp.Integer(0)
+            a_r = rp.coeffs()[0] if rp.degree() == 1 else sp.Integer(0)
+            x_on_both = (a_l != 0 and a_r != 0)
+            net_coeff = sp.simplify(a_l - a_r)
+        except Exception:
+            x_on_both = False
+            net_coeff = sp.Integer(1)
+        # When x is on both sides, _estimate_linear_steps already counts the
+        # division step internally — do not double-count it.
+        # When x is on one side only, add 1 if coefficient != ±1.
+        if x_on_both:
+            has_division = False
+        else:
+            has_division = net_coeff not in (sp.Integer(1), sp.Integer(-1))
+        return ops + (1 if has_division else 0)
+
+    def _progress_percent(lines_done):
+        total = _total_expected_lines()
+        if total is None or total <= 0:
+            return None
+        pct = int(round(100 * lines_done / total))
+        return max(0, min(99, pct))
 
     for i, step in enumerate(student_steps):
         try:
@@ -251,6 +275,7 @@ def validate_steps(student_steps, equation):
                 return i, expert_not_equivalent_feedback()
 
             prev = current
+            last_step_str = step
 
         except Exception as e:
             return i, f"Invalid expression ({type(e).__name__}): {e}"
@@ -258,5 +283,5 @@ def validate_steps(student_steps, equation):
     if found_solution_line:
         return -1, expert_all_correct_feedback()
 
-    pct = _progress_percent(prev)
+    pct = _progress_percent(len(student_steps))
     return -2, expert_progress_feedback(pct)
