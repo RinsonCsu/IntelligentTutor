@@ -18,7 +18,6 @@ from symbolic_planner import SymbolicPlanner
 _SP_TF = standard_transformations + (convert_xor, implicit_multiplication_application,)
 
 def _student_has_equation_step(steps, eq):
-    """Return True if any student step is symbolically equivalent to eq."""
     try:
         eq_parsed = sp.Eq(parse_expr(eq.split("=")[0], transformations=_SP_TF),
                           parse_expr(eq.split("=")[1], transformations=_SP_TF))
@@ -150,7 +149,6 @@ class MathTutorApp:
         self.output.tag_configure("heading",   foreground="#1a1a5e", font=("Comic Sans MS", 13, "bold"))
 
     def _extract_equation(self, raw: str) -> str:
-        """Extract solver-compatible equation from a word problem or plain equation string."""
         import re as _re
         m = _re.search(r"\[equation:\s*(.+?)\]", raw)
         if m:
@@ -158,7 +156,6 @@ class MathTutorApp:
         return raw.split("\n")[0].strip()
 
     def _load_equation(self, raw: str):
-        """Load a new equation (plain or word problem) into the question box."""
         eq = self._extract_equation(raw)
         self._current_equation = eq
 
@@ -247,14 +244,11 @@ class MathTutorApp:
                 ns = s.replace(" ", "")
                 if "x**2" in ns or "x^2" in ns:
                     return True
-                # grouped form: x(...) + n(...) = 0
                 if _re.search(r'x\s*\(', ns):
                     return True
-                # factored form: (...)(...) = 0
                 if _re.search(r'\([^)]+\)\s*\*?\s*\([^)]+\)', ns):
                     return True
                 return False
-            eq_no_space = equation.replace(" ", "")
             is_quadratic = _is_quadratic_str(start_equation) or _is_quadratic_str(equation)
             if is_quadratic:
                 hint = astar_next_step_factor_quadratic(start_equation)

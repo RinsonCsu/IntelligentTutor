@@ -29,7 +29,6 @@ def _parse(s):
 _PLAIN_NUMBER_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
 
 def _is_plain_number_str(s: str) -> bool:
-    """True only if s is a bare numeric literal — no operators or expressions."""
     return bool(_PLAIN_NUMBER_RE.match(s.strip().replace(" ", "")))
 
 def _extract_solution_value(eq, lhs_str: str = "", rhs_str: str = ""):
@@ -147,9 +146,6 @@ def validate_steps(student_steps, equation):
         return expert_is_acceptable_final_answer(s)
 
     def _ideal_sequence(eq_str, max_iter=10):
-        """Return list of (eq_str, is_fraction_step) tuples for the ideal solution path.
-        When DIVIDE_COEFFICIENT fires with a non-unit coefficient, inject the
-        unsimplified x=a/b step (marked is_fraction_step=True) before x=val."""
         seq = []
         current = eq_str
         for _ in range(max_iter):
@@ -173,10 +169,7 @@ def validate_steps(student_steps, equation):
         return seq
 
     def _step_matches(student_str, ideal_str, is_fraction_step):
-        """Match student step against an ideal step.
-        For fraction steps, use string-level RHS comparison to avoid SymPy simplifying 6/3 -> 2."""
         if is_fraction_step:
-            # Match if student wrote x = <anything with /> that is mathematically equal
             if "=" not in student_str or student_str.count("=") != 1:
                 return False
             sl, sr = [p.strip() for p in student_str.split("=")]
@@ -184,18 +177,14 @@ def validate_steps(student_steps, equation):
                 return False
             if "/" not in sr:
                 return False
-            # Parse both RHS symbolically to confirm same value
             try:
                 il, ir = [p.strip() for p in ideal_str.split("=")]
                 return sp.simplify(_parse(sr) - _parse(ir)) == 0
             except Exception:
                 return False
-        # Normal algebraic equivalence — but if student wrote x=a/b (unsimplified),
-        # don't match it against a plain-number ideal step like x=2.
         try:
             al, ar = [p.strip() for p in student_str.split("=")]
             bl, br = [p.strip() for p in ideal_str.split("=")]
-            # Student has unsimplified fraction on RHS — skip non-fraction ideal steps
             if al.replace(" ", "") == "x" and "/" in ar and _is_plain_number_str(br):
                 return False
             a_eq = sp.Eq(_parse(al), _parse(ar))

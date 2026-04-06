@@ -1,28 +1,6 @@
-"""
-word_problem_generator.py
---------------------------
-Neuro-symbolic word problem generator.
-
-The PSS owns all mathematical structure:
-  - template type   (ADD, SUBTRACT, MULTIPLY, DIVIDE)
-  - numeric slots   (A, B, answer)
-  - semantic slots  (name, object, verb_phrase)
-
-If the fine-tuned T5 model exists in word_problem_model/, it is loaded once
-at import time and used to generate sentences from PSS schemas.  If not, the
-PSS slot-fill templates are used as a fallback.
-
-The equation string always comes from the PSS regardless of which path
-generates the sentence, guaranteeing mathematical correctness.
-"""
-
 import random
 import json
 import os
-
-# ---------------------------------------------------------------------------
-# T5 model — loaded once at import time if word_problem_model/ exists
-# ---------------------------------------------------------------------------
 
 _MODEL_DIR = os.path.join(os.path.dirname(__file__), "word_problem_model")
 _t5_model     = None
@@ -48,10 +26,6 @@ def _load_t5_model():
 
 _load_t5_model()
 
-# ---------------------------------------------------------------------------
-# PSS Symbol store — named slot vocabulary
-# ---------------------------------------------------------------------------
-
 NAMES = [
     "John", "Maria", "Sarah", "Tom", "Emma", "Liam", "Olivia", "Noah",
     "Ava", "James", "Sophia", "Lucas", "Mia", "Ethan", "Isabella",
@@ -75,11 +49,6 @@ OBJECTS = [
     ("bottle",   "bottles"),
     ("flower",   "flowers"),
 ]
-
-# ---------------------------------------------------------------------------
-# PSS Template schemas — one per equation type
-# Sentence templates use {name}, {A}, {B}, {answer}, {obj}, {objs} as slots
-# ---------------------------------------------------------------------------
 
 TEMPLATE_SCHEMAS = {
 
@@ -150,10 +119,6 @@ TEMPLATE_SCHEMAS = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# PSS production rules — numeric slot instantiation
-# ---------------------------------------------------------------------------
-
 def _build_add_schema(rng):
     A = rng.randint(2, 30)
     B = rng.randint(1, 20)
@@ -184,7 +149,7 @@ def _build_find_unknown_add_schema(rng):
 def _build_find_unknown_subtract_schema(rng):
     x = rng.randint(1, 20)
     B = rng.randint(1, 15)
-    A = B + x          # guarantees A > B always
+    A = B + x
     assert A > B, f"Schema error: A={A} must be > B={B}"
     return {"A": A, "B": B, "answer": x}
 
@@ -197,10 +162,6 @@ SCHEMA_BUILDERS = {
     "FIND_UNKNOWN_ADD":       _build_find_unknown_add_schema,
     "FIND_UNKNOWN_SUBTRACT":  _build_find_unknown_subtract_schema,
 }
-
-# ---------------------------------------------------------------------------
-# Slot filler — composes schema into input/output pair
-# ---------------------------------------------------------------------------
 
 def _fill_slots(template_id, numeric, name, obj_singular, obj_plural, sentence_template):
     sentence = sentence_template.format(
@@ -218,10 +179,6 @@ def _fill_slots(template_id, numeric, name, obj_singular, obj_plural, sentence_t
     )
     return schema_str, sentence
 
-
-# ---------------------------------------------------------------------------
-# Generator — produces N training pairs
-# ---------------------------------------------------------------------------
 
 def generate_training_pairs(n: int = 500, seed: int = 42) -> list[dict]:
     rng = random.Random(seed)
@@ -257,7 +214,6 @@ def generate_training_pairs(n: int = 500, seed: int = 42) -> list[dict]:
 
 
 def _equation_str(template_id: str, numeric: dict) -> str:
-    """Return a solver-compatible equation string for the given template and slots."""
     A = numeric["A"]
     B = numeric["B"]
     ans = numeric["answer"]
@@ -273,7 +229,6 @@ def _equation_str(template_id: str, numeric: dict) -> str:
 
 
 def _t5_generate(schema_str: str) -> str:
-    """Use the fine-tuned T5 model to generate a sentence from a schema string."""
     import torch
     input_ids = _t5_tokenizer(
         schema_str, max_length=128, return_tensors="pt"
@@ -286,18 +241,6 @@ def _t5_generate(schema_str: str) -> str:
 
 
 def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
-    """
-    Generate one word problem.
-
-    If the fine-tuned T5 model is loaded, it generates the sentence.
-    Otherwise the PSS slot-fill template is used as fallback.
-    The equation string always comes from the PSS.
-
-    Returns:
-        (sentence, equation_str)
-        - sentence     : human-readable word problem string
-        - equation_str : solver-compatible equation e.g. "10 + 5 = x"
-    """
     rng = random.Random(seed)
     tid      = template_id or rng.choice(list(TEMPLATE_SCHEMAS.keys()))
     numeric  = SCHEMA_BUILDERS[tid](rng)
@@ -310,14 +253,12 @@ def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
     import re as _re
 
     def _numbers_valid(sent, num):
-        """All expected numbers appear in the sentence."""
         for n in (num["A"], num["B"]):
             if not _re.search(r'\b' + str(n) + r'\b', sent):
                 return False
         return True
 
     def _semantically_valid(sent, num, template):
-        """For subtract templates, starting number must appear before remainder."""
         if template in ("FIND_UNKNOWN_SUBTRACT", "SUBTRACT_REMAINING"):
             def _pos(s, n):
                 m = _re.search(r'\b' + str(n) + r'\b', s)
@@ -346,7 +287,6 @@ def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
                 )
                 candidate = _t5_generate(attempt_schema)
                 if _numbers_valid(candidate, attempt_numeric) and _semantically_valid(candidate, attempt_numeric, tid):
-                    # Accept — update outputs if we used a different attempt
                     if attempt > 0:
                         numeric.update(attempt_numeric)
                         eq_str = _equation_str(tid, attempt_numeric)
@@ -377,10 +317,6 @@ def load_pairs(path: str) -> list[dict]:
     with open(path) as f:
         return json.load(f)
 
-
-# ---------------------------------------------------------------------------
-# CLI entry point — generate and save pairs
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     out_path = os.path.join(os.path.dirname(__file__), "word_problem_pairs.json")
