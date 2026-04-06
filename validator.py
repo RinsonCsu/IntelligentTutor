@@ -16,6 +16,8 @@ from expert_system import (
     expert_progress_feedback,
     expert_all_correct_feedback,
     expert_is_acceptable_final_answer,
+    count_steps_remaining,
+    infer_expert_next_step,
 )
 
 x = sp.symbols('x')
@@ -134,7 +136,7 @@ def validate_steps(student_steps, equation):
     lhs, rhs = equation.split("=")
     original = sp.Eq(_parse(lhs), _parse(rhs))
     prev = original
-    last_step_str = ""
+    last_step_str = equation
     found_solution_line = False
 
     def _validate_solution_value(sol_value):
@@ -144,37 +146,84 @@ def validate_steps(student_steps, equation):
     def _is_acceptable_final_answer_text(s):
         return expert_is_acceptable_final_answer(s)
 
-    def _total_expected_lines():
-        """Estimate total lines a student needs to write."""
-        ops = _estimate_linear_steps(original)
-        if ops is None:
-            return None
-        lhs_s = sp.simplify(original.lhs)
-        rhs_s = sp.simplify(original.rhs)
-        try:
-            lp = sp.Poly(lhs_s, x)
-            rp = sp.Poly(rhs_s, x)
-            a_l = lp.coeffs()[0] if lp.degree() == 1 else sp.Integer(0)
-            a_r = rp.coeffs()[0] if rp.degree() == 1 else sp.Integer(0)
-            x_on_both = (a_l != 0 and a_r != 0)
-            net_coeff = sp.simplify(a_l - a_r)
-        except Exception:
-            x_on_both = False
-            net_coeff = sp.Integer(1)
-        # When x is on both sides, _estimate_linear_steps already counts the
-        # division step internally — do not double-count it.
-        # When x is on one side only, add 1 if coefficient != ±1.
-        if x_on_both:
-            has_division = False
-        else:
-            has_division = net_coeff not in (sp.Integer(1), sp.Integer(-1))
-        return ops + (1 if has_division else 0)
+    def _ideal_sequence(eq_str, max_iter=10):
+        """Return list of (eq_str, is_fraction_step) tuples for the ideal solution path.
+        When DIVIDE_COEFFICIENT fires with a non-unit coefficient, inject the
+        unsimplified x=a/b step (marked is_fraction_step=True) before x=val."""
+        seq = []
+        current = eq_str
+        for _ in range(max_iter):
+            result = infer_expert_next_step(current)
+            if result is None:
+                break
+            next_eq, rule = result
+            if "DIVIDE_COEFFICIENT" in rule:
+                try:
+                    lhs_s, rhs_s = current.split("=")
+                    lp = sp.Poly(_parse(lhs_s), x)
+                    rp = sp.Poly(_parse(rhs_s), x)
+                    a = lp.coeffs()[0] if lp.degree() == 1 else rp.coeffs()[0]
+                    b = rp.TC() if lp.degree() == 1 else lp.TC()
+                    if sp.simplify(a - 1) != 0 and sp.simplify(a + 1) != 0:
+                        seq.append((f"x = {b}/{a}", True))
+                except Exception:
+                    pass
+            current = next_eq
+            seq.append((current, False))
+        return seq
 
-    def _progress_percent(lines_done):
-        total = _total_expected_lines()
-        if total is None or total <= 0:
+    def _step_matches(student_str, ideal_str, is_fraction_step):
+        """Match student step against an ideal step.
+        For fraction steps, use string-level RHS comparison to avoid SymPy simplifying 6/3 -> 2."""
+        if is_fraction_step:
+            # Match if student wrote x = <anything with /> that is mathematically equal
+            if "=" not in student_str or student_str.count("=") != 1:
+                return False
+            sl, sr = [p.strip() for p in student_str.split("=")]
+            if sl.replace(" ", "") != "x":
+                return False
+            if "/" not in sr:
+                return False
+            # Parse both RHS symbolically to confirm same value
+            try:
+                il, ir = [p.strip() for p in ideal_str.split("=")]
+                return sp.simplify(_parse(sr) - _parse(ir)) == 0
+            except Exception:
+                return False
+        # Normal algebraic equivalence — but if student wrote x=a/b (unsimplified),
+        # don't match it against a plain-number ideal step like x=2.
+        try:
+            al, ar = [p.strip() for p in student_str.split("=")]
+            bl, br = [p.strip() for p in ideal_str.split("=")]
+            # Student has unsimplified fraction on RHS — skip non-fraction ideal steps
+            if al.replace(" ", "") == "x" and "/" in ar and _is_plain_number_str(br):
+                return False
+            a_eq = sp.Eq(_parse(al), _parse(ar))
+            b_eq = sp.Eq(_parse(bl), _parse(br))
+            return (sp.simplify(a_eq.lhs - b_eq.lhs) == 0 and
+                    sp.simplify(a_eq.rhs - b_eq.rhs) == 0) or \
+                   (sp.simplify(a_eq.lhs - b_eq.rhs) == 0 and
+                    sp.simplify(a_eq.rhs - b_eq.lhs) == 0)
+        except Exception:
+            return False
+
+    _ideal_seq = _ideal_sequence(equation)
+    _total_steps = len(_ideal_seq)
+
+    def _progress_percent():
+        if _total_steps <= 0:
             return None
-        pct = int(round(100 * lines_done / total))
+        for idx in range(_total_steps - 1, -1, -1):
+            ideal_str, is_frac = _ideal_seq[idx]
+            if _step_matches(last_step_str, ideal_str, is_frac):
+                pct = int(round(100 * (idx + 1) / _total_steps))
+                return max(0, min(99, pct))
+        # Fallback
+        remaining = count_steps_remaining(last_step_str)
+        if remaining is None:
+            return None
+        done = _total_steps - remaining
+        pct = int(round(100 * done / _total_steps))
         return max(0, min(99, pct))
 
     for i, step in enumerate(student_steps):
@@ -283,5 +332,5 @@ def validate_steps(student_steps, equation):
     if found_solution_line:
         return -1, expert_all_correct_feedback()
 
-    pct = _progress_percent(len(student_steps))
+    pct = _progress_percent()
     return -2, expert_progress_feedback(pct)

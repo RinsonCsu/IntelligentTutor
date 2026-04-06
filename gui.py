@@ -242,8 +242,20 @@ class MathTutorApp:
                     break
 
         try:
-            start_no_space = start_equation.replace(" ", "")
-            is_quadratic = ("x**2" in start_no_space) or ("x^2" in start_no_space)
+            import re as _re
+            def _is_quadratic_str(s):
+                ns = s.replace(" ", "")
+                if "x**2" in ns or "x^2" in ns:
+                    return True
+                # grouped form: x(...) + n(...) = 0
+                if _re.search(r'x\s*\(', ns):
+                    return True
+                # factored form: (...)(...) = 0
+                if _re.search(r'\([^)]+\)\s*\*?\s*\([^)]+\)', ns):
+                    return True
+                return False
+            eq_no_space = equation.replace(" ", "")
+            is_quadratic = _is_quadratic_str(start_equation) or _is_quadratic_str(equation)
             if is_quadratic:
                 hint = astar_next_step_factor_quadratic(start_equation)
                 if not hint:

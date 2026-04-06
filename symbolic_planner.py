@@ -329,7 +329,11 @@ def _build_word_problem_equation(profile: WordProblemProfile, rng: random.Random
             seed=seed,
         )
         return f"{sentence}\n[equation: {eq_str}]"
-    except Exception:
+    except ValueError as e:
+        print(f"[ERROR] {e}")
+        raise
+    except Exception as e:
+        print(f"[ERROR] Word problem generation failed unexpectedly: {e}")
         return _fallback(profile.level)
 
 

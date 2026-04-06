@@ -184,7 +184,8 @@ def _build_find_unknown_add_schema(rng):
 def _build_find_unknown_subtract_schema(rng):
     x = rng.randint(1, 20)
     B = rng.randint(1, 15)
-    A = B + x
+    A = B + x          # guarantees A > B always
+    assert A > B, f"Schema error: A={A} must be > B={B}"
     return {"A": A, "B": B, "answer": x}
 
 
@@ -306,12 +307,60 @@ def build_word_problem(template_id: str = None, seed: int = None) -> tuple:
     schema_str, pss_sentence = _fill_slots(tid, numeric, name, obj_s, obj_p, tmpl)
     eq_str   = _equation_str(tid, numeric)
 
+    import re as _re
+
+    def _numbers_valid(sent, num):
+        """All expected numbers appear in the sentence."""
+        for n in (num["A"], num["B"]):
+            if not _re.search(r'\b' + str(n) + r'\b', sent):
+                return False
+        return True
+
+    def _semantically_valid(sent, num, template):
+        """For subtract templates, starting number must appear before remainder."""
+        if template in ("FIND_UNKNOWN_SUBTRACT", "SUBTRACT_REMAINING"):
+            def _pos(s, n):
+                m = _re.search(r'\b' + str(n) + r'\b', s)
+                return m.start() if m else -1
+            if _pos(sent, num["A"]) > _pos(sent, num["B"]):
+                return False
+        # Universal: detect "had X ... now have Y" where Y > X (impossible subtract story)
+        had = _re.search(r'\bhad\s+(\d+)\b', sent)
+        now = _re.search(r'\bnow\s+have\s+(\d+)\b', sent)
+        if had and now and int(now.group(1)) > int(had.group(1)):
+            return False
+        return True
+
     if _t5_model is not None:
-        try:
-            sentence = _t5_generate(schema_str)
-        except Exception as e:
-            print(f"[word_problem_generator] T5 inference failed ({e}), using PSS.")
-            sentence = pss_sentence
+        max_retries = 5
+        sentence = None
+        for attempt in range(max_retries):
+            try:
+                attempt_rng = random.Random(seed + attempt * 1000 if seed is not None else attempt)
+                attempt_numeric = SCHEMA_BUILDERS[tid](attempt_rng) if attempt > 0 else numeric
+                attempt_name = attempt_rng.choice(NAMES) if attempt > 0 else name
+                attempt_obj_s, attempt_obj_p = attempt_rng.choice(OBJECTS) if attempt > 0 else (obj_s, obj_p)
+                attempt_tmpl = attempt_rng.choice(TEMPLATE_SCHEMAS[tid]["sentence_templates"]) if attempt > 0 else tmpl
+                attempt_schema, attempt_pss = _fill_slots(
+                    tid, attempt_numeric, attempt_name, attempt_obj_s, attempt_obj_p, attempt_tmpl
+                )
+                candidate = _t5_generate(attempt_schema)
+                if _numbers_valid(candidate, attempt_numeric) and _semantically_valid(candidate, attempt_numeric, tid):
+                    # Accept — update outputs if we used a different attempt
+                    if attempt > 0:
+                        numeric.update(attempt_numeric)
+                        eq_str = _equation_str(tid, attempt_numeric)
+                        pss_sentence = attempt_pss
+                    sentence = candidate
+                    break
+            except Exception as e:
+                print(f"[word_problem_generator] T5 attempt {attempt+1} failed ({e}).")
+        if sentence is None:
+            raise ValueError(
+                f"[word_problem_generator] T5 failed to produce a valid sentence "
+                f"for template='{tid}' after {max_retries} attempts. "
+                f"Last schema: {schema_str}"
+            )
     else:
         sentence = pss_sentence
 
