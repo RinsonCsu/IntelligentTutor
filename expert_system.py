@@ -7,6 +7,15 @@ from sympy.parsing.sympy_parser import (
 )
 
 
+def _model_label(prev_step: str, curr_step: str, equation: str) -> str:
+    try:
+        from model import classify_error_from_steps
+        _, label, _ = classify_error_from_steps(prev_step, curr_step, equation)
+        return label
+    except Exception:
+        return None
+
+
 x = sp.symbols("x")
 transformations = standard_transformations + (convert_xor, implicit_multiplication_application,)
 
@@ -226,70 +235,6 @@ def infer_expert_next_step(equation_text: str):
     return None
 
 
-def diagnose_step_error(equation_text: str, prev_step_text: str, current_step_text: str, validator_message: str):
-    original = _parse_eq(equation_text)
-    prev_eq = _parse_eq(prev_step_text)
-    cur_eq = _parse_eq(current_step_text)
-
-    if validator_message.startswith("Missing '") or "Missing '=" in validator_message:
-        return ("Invalid", "Each step must contain exactly one '='.")
-
-    if "MULTIPLE_EQUALS" in validator_message:
-        import re as _re
-        if _re.search(r"\bor\b", current_step_text, flags=_re.IGNORECASE):
-            return (
-                "Invalid",
-                "Write each equation separately, e.g. 'x + 3 = 0 or x + 1 = 0'.",
-            )
-        return ("Invalid", "Each step must contain exactly one '='.")
-
-    if original is None or prev_eq is None or cur_eq is None:
-        return None
-
-    if validator_message == "Not equivalent transformation":
-        if sp.simplify(prev_eq.lhs - cur_eq.lhs) == 0 and sp.simplify(prev_eq.rhs - cur_eq.rhs) != 0:
-            return (
-                "Algebraic Error",
-                "You changed only one side — do the same thing to both sides.",
-            )
-        if sp.simplify(prev_eq.rhs - cur_eq.rhs) == 0 and sp.simplify(prev_eq.lhs - cur_eq.lhs) != 0:
-            return (
-                "Algebraic Error",
-                "You changed only one side — do the same thing to both sides.",
-            )
-        try:
-            prev_expr = sp.simplify(prev_eq.lhs - prev_eq.rhs)
-            cur_expr = sp.simplify(cur_eq.lhs - cur_eq.rhs)
-        except Exception:
-            prev_expr = None
-            cur_expr = None
-        if prev_expr is not None and cur_expr is not None:
-            if sp.simplify(prev_expr + cur_expr) == 0:
-                return (
-                    "Sign Error",
-                    "Looks like all the signs got flipped — check you didn't accidentally multiply by -1.",
-                )
-
-        return (
-            "Algebraic Error",
-            "This step isn't algebraically equivalent to the previous one.",
-        )
-
-    if validator_message == "Incorrect solution":
-        return (
-            "Arithmetic Error",
-            "That value doesn't satisfy the original equation — substitute it back to check.",
-        )
-
-    if validator_message.startswith("Invalid expression"):
-        return (
-            "Invalid",
-            "Couldn't read that expression — check your brackets, operators and spacing.",
-        )
-
-    return None
-
-
 def expert_solution_format_feedback(rhs_texts):
     if not rhs_texts:
         return None
@@ -297,19 +242,21 @@ def expert_solution_format_feedback(rhs_texts):
 
 
 def expert_missing_equals_feedback():
-    return "Each step must contain exactly one '='."
+    return "Format: missing '=' — each step needs exactly one"
 
 
 def expert_multiple_equals_feedback():
-    return "Invalid expression — each step should have exactly one '='."
+    return "Format: too many '=' signs — each step should have exactly one"
 
 
-def expert_incorrect_solution_feedback():
-    return "Incorrect — substitute your answer back into the original equation to check."
+def expert_incorrect_solution_feedback(prev="", curr="", eq="") -> str:
+    label = _model_label(prev, curr, eq) if prev and curr and eq else None
+    return label or "Arithmetic Error"
 
 
-def expert_not_equivalent_feedback():
-    return "This step isn't algebraically equivalent to the previous one."
+def expert_not_equivalent_feedback(prev="", curr="", eq="") -> str:
+    label = _model_label(prev, curr, eq) if prev and curr and eq else None
+    return label or "Algebraic Error"
 
 
 def expert_progress_feedback(pct):

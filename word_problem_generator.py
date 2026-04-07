@@ -2,7 +2,9 @@ import random
 import json
 import os
 
-_MODEL_DIR = os.path.join(os.path.dirname(__file__), "word_problem_model")
+import sys as _sys
+_BASE_DIR  = getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+_MODEL_DIR = os.path.join(_BASE_DIR, "word_problem_model")
 _t5_model     = None
 _t5_tokenizer = None
 _t5_device    = None

@@ -240,7 +240,9 @@ def validate_steps(student_steps, equation):
                 if not _is_acceptable_final_answer_text(sol_text):
                     all_clauses_have_acceptable_format = False
                 if not _validate_solution_value(sol_value):
-                    return i, expert_incorrect_solution_feedback()
+                    return i, expert_incorrect_solution_feedback(
+                        prev=last_step_str, curr=step, eq=equation
+                    )
 
             if all_clauses_are_solutions and all_clauses_have_acceptable_format:
                 found_solution_line = True
@@ -289,7 +291,9 @@ def validate_steps(student_steps, equation):
                             break
                     valid_split = all_matched
                 if not valid_split:
-                    return i, expert_not_equivalent_feedback()
+                    return i, expert_not_equivalent_feedback(
+                        prev=last_step_str, curr=step, eq=equation
+                    )
                 prev = clause_eqs[-1]
                 continue
 
@@ -310,7 +314,9 @@ def validate_steps(student_steps, equation):
                         equivalent = sp.simplify(prev_expr - ratio * curr_expr) == 0
 
             if not equivalent:
-                return i, expert_not_equivalent_feedback()
+                return i, expert_not_equivalent_feedback(
+                    prev=last_step_str, curr=step, eq=equation
+                )
 
             prev = current
             last_step_str = step

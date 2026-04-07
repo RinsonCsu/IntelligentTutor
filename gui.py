@@ -395,9 +395,8 @@ class MathTutorApp:
                     self.student.update(False)
                     self._last_answer_correct = False
                     self.progress_label.config(fg="#cc0000")
-                    self.progress_var.set(f"✘  Incorrect at Step {error_index+1}")
-                    self.output.insert(tk.END, f"\n✘  Incorrect at Step {error_index+1}\n", "incorrect")
-                    self.output.insert(tk.END, f"Reason: {result}\n")
+                    self.progress_var.set(f"✘  Step {error_index+1}: {result}")
+                    self.output.insert(tk.END, f"\n✘  Error at Step {error_index+1}: {result}\n", "incorrect")
 
             self._update_score()
             self.output.insert(tk.END, f"\nDifficulty: {self.student.difficulty}\n")

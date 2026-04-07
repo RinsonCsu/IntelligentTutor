@@ -227,19 +227,6 @@ def astar_next_step_factor_quadratic(equation, max_expansions=400):
     lhs, rhs = equation.split("=")
     start_eq = sp.Eq(_parse(lhs), _parse(rhs))
 
-    def _looks_split_middle_term_text(eq_text: str):
-        import re as _re
-        t = eq_text.replace(" ", "")
-        if "=" not in t:
-            return False
-        lhs_txt = t.split("=")[0]
-        if "x**2" not in lhs_txt and "x^2" not in lhs_txt:
-            return False
-        # Count linear x occurrences after removing the quadratic token.
-        # Handles both explicit '3*x' and implicit '3x' forms.
-        lhs_no_x2 = _re.sub(r'x(\*\*|[\^])2', '', lhs_txt)
-        return lhs_no_x2.count("x") >= 2
-
     def _canonical(eq):
         return sp.srepr(eq.lhs), sp.srepr(eq.rhs)
 
@@ -256,8 +243,6 @@ def astar_next_step_factor_quadratic(equation, max_expansions=400):
     if _as_poly0(start_eq) is None:
         return None
 
-    # If the student already typed the split-middle-term form, SymPy will recombine it on parse,
-    # causing A* to repeat the split hint. Use infer_expert_next_step to advance one step at a time.
     try:
         if sp.simplify(start_eq.rhs) == 0:
             from expert_system import infer_expert_next_step as _expert_next
