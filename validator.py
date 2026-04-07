@@ -16,6 +16,8 @@ from expert_system import (
     expert_progress_feedback,
     expert_all_correct_feedback,
     expert_is_acceptable_final_answer,
+    count_steps_remaining,
+    infer_expert_next_step,
 )
 
 x = sp.symbols('x')
@@ -24,11 +26,18 @@ transformations = standard_transformations + (convert_xor, implicit_multiplicati
 def _parse(s):
     return parse_expr(s, transformations=transformations)
 
-def _extract_solution_value(eq):
+_PLAIN_NUMBER_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
+
+def _is_plain_number_str(s: str) -> bool:
+    return bool(_PLAIN_NUMBER_RE.match(s.strip().replace(" ", "")))
+
+def _extract_solution_value(eq, lhs_str: str = "", rhs_str: str = ""):
     if eq.lhs == x and x not in getattr(eq.rhs, "free_symbols", set()):
-        return eq.rhs
+        if _is_plain_number_str(rhs_str):
+            return sp.simplify(eq.rhs)
     if eq.rhs == x and x not in getattr(eq.lhs, "free_symbols", set()):
-        return eq.lhs
+        if _is_plain_number_str(lhs_str):
+            return sp.simplify(eq.lhs)
     return None
 
 def _estimate_linear_steps(eq):
@@ -36,9 +45,9 @@ def _estimate_linear_steps(eq):
     rhs_s = sp.simplify(eq.rhs)
 
     if lhs_s == x and x not in getattr(rhs_s, "free_symbols", set()):
-        return 0
+        return 0 if rhs_s.is_Atom else 1
     if rhs_s == x and x not in getattr(lhs_s, "free_symbols", set()):
-        return 0
+        return 0 if lhs_s.is_Atom else 1
 
     def _lin_parts(side):
         try:
@@ -126,6 +135,7 @@ def validate_steps(student_steps, equation):
     lhs, rhs = equation.split("=")
     original = sp.Eq(_parse(lhs), _parse(rhs))
     prev = original
+    last_step_str = equation
     found_solution_line = False
 
     def _validate_solution_value(sol_value):
@@ -135,15 +145,75 @@ def validate_steps(student_steps, equation):
     def _is_acceptable_final_answer_text(s):
         return expert_is_acceptable_final_answer(s)
 
-    def _progress_percent(current_eq):
-        start = _estimate_linear_steps(original)
-        cur = _estimate_linear_steps(current_eq)
-        if start is None or cur is None:
+    def _ideal_sequence(eq_str, max_iter=10):
+        seq = []
+        current = eq_str
+        for _ in range(max_iter):
+            result = infer_expert_next_step(current)
+            if result is None:
+                break
+            next_eq, rule = result
+            if "DIVIDE_COEFFICIENT" in rule:
+                try:
+                    lhs_s, rhs_s = current.split("=")
+                    lp = sp.Poly(_parse(lhs_s), x)
+                    rp = sp.Poly(_parse(rhs_s), x)
+                    a = lp.coeffs()[0] if lp.degree() == 1 else rp.coeffs()[0]
+                    b = rp.TC() if lp.degree() == 1 else lp.TC()
+                    if sp.simplify(a - 1) != 0 and sp.simplify(a + 1) != 0:
+                        seq.append((f"x = {b}/{a}", True))
+                except Exception:
+                    pass
+            current = next_eq
+            seq.append((current, False))
+        return seq
+
+    def _step_matches(student_str, ideal_str, is_fraction_step):
+        if is_fraction_step:
+            if "=" not in student_str or student_str.count("=") != 1:
+                return False
+            sl, sr = [p.strip() for p in student_str.split("=")]
+            if sl.replace(" ", "") != "x":
+                return False
+            if "/" not in sr:
+                return False
+            try:
+                il, ir = [p.strip() for p in ideal_str.split("=")]
+                return sp.simplify(_parse(sr) - _parse(ir)) == 0
+            except Exception:
+                return False
+        try:
+            al, ar = [p.strip() for p in student_str.split("=")]
+            bl, br = [p.strip() for p in ideal_str.split("=")]
+            if al.replace(" ", "") == "x" and "/" in ar and _is_plain_number_str(br):
+                return False
+            a_eq = sp.Eq(_parse(al), _parse(ar))
+            b_eq = sp.Eq(_parse(bl), _parse(br))
+            return (sp.simplify(a_eq.lhs - b_eq.lhs) == 0 and
+                    sp.simplify(a_eq.rhs - b_eq.rhs) == 0) or \
+                   (sp.simplify(a_eq.lhs - b_eq.rhs) == 0 and
+                    sp.simplify(a_eq.rhs - b_eq.lhs) == 0)
+        except Exception:
+            return False
+
+    _ideal_seq = _ideal_sequence(equation)
+    _total_steps = len(_ideal_seq)
+
+    def _progress_percent():
+        if _total_steps <= 0:
             return None
-        if start <= 0:
-            return 100
-        pct = int(round(100 * (start - cur) / start))
-        return max(0, min(100, pct))
+        for idx in range(_total_steps - 1, -1, -1):
+            ideal_str, is_frac = _ideal_seq[idx]
+            if _step_matches(last_step_str, ideal_str, is_frac):
+                pct = int(round(100 * (idx + 1) / _total_steps))
+                return max(0, min(99, pct))
+        # Fallback
+        remaining = count_steps_remaining(last_step_str)
+        if remaining is None:
+            return None
+        done = _total_steps - remaining
+        pct = int(round(100 * done / _total_steps))
+        return max(0, min(99, pct))
 
     for i, step in enumerate(student_steps):
         try:
@@ -162,14 +232,17 @@ def validate_steps(student_steps, equation):
                     break
                 l, r = clause.split("=")
                 eq_clause = sp.Eq(_parse(l), _parse(r))
-                sol_value = _extract_solution_value(eq_clause)
+                sol_value = _extract_solution_value(eq_clause, lhs_str=l, rhs_str=r)
                 if sol_value is None:
                     all_clauses_are_solutions = False
                     break
-                if not _is_acceptable_final_answer_text(r):
+                sol_text = l if _is_plain_number_str(l) else r
+                if not _is_acceptable_final_answer_text(sol_text):
                     all_clauses_have_acceptable_format = False
                 if not _validate_solution_value(sol_value):
-                    return i, expert_incorrect_solution_feedback()
+                    return i, expert_incorrect_solution_feedback(
+                        prev=last_step_str, curr=step, eq=equation
+                    )
 
             if all_clauses_are_solutions and all_clauses_have_acceptable_format:
                 found_solution_line = True
@@ -179,6 +252,50 @@ def validate_steps(student_steps, equation):
                 rhs_texts = [c.split("=")[1].strip() for c in clauses if c.count("=") == 1]
                 msg = expert_solution_format_feedback(rhs_texts)
                 return -2, msg or "Correct solutions, but format final answers as a decimal (>= 2 dp) or a proper fraction"
+
+            if len(clauses) > 1:
+                clause_eqs = []
+                for clause in clauses:
+                    if clause.count("=") != 1:
+                        return i, expert_multiple_equals_feedback()
+                    cl, cr = clause.split("=")
+                    try:
+                        clause_eqs.append(sp.Eq(_parse(cl), _parse(cr)))
+                    except Exception:
+                        return i, expert_multiple_equals_feedback()
+                prev_expr = sp.simplify(prev.lhs - prev.rhs)
+                try:
+                    prev_factors = sp.factor(prev_expr)
+                    if isinstance(prev_factors, sp.Mul):
+                        factor_list = [f for f in prev_factors.args if x in getattr(f, "free_symbols", set())]
+                    else:
+                        factor_list = [prev_factors] if x in getattr(prev_factors, "free_symbols", set()) else []
+                except Exception:
+                    factor_list = []
+                valid_split = False
+                if factor_list and len(factor_list) == len(clause_eqs):
+                    matched = [False] * len(factor_list)
+                    all_matched = True
+                    for ceq in clause_eqs:
+                        ceq_expr = sp.simplify(ceq.lhs - ceq.rhs)
+                        found = False
+                        for fi, fac in enumerate(factor_list):
+                            if not matched[fi]:
+                                ratio = sp.simplify(fac / ceq_expr) if ceq_expr != 0 else None
+                                if ratio is not None and getattr(ratio, "free_symbols", set()) == set() and ratio != 0:
+                                    matched[fi] = True
+                                    found = True
+                                    break
+                        if not found:
+                            all_matched = False
+                            break
+                    valid_split = all_matched
+                if not valid_split:
+                    return i, expert_not_equivalent_feedback(
+                        prev=last_step_str, curr=step, eq=equation
+                    )
+                prev = clause_eqs[-1]
+                continue
 
             if step.count("=") != 1:
                 return i, expert_multiple_equals_feedback()
@@ -197,9 +314,12 @@ def validate_steps(student_steps, equation):
                         equivalent = sp.simplify(prev_expr - ratio * curr_expr) == 0
 
             if not equivalent:
-                return i, expert_not_equivalent_feedback()
+                return i, expert_not_equivalent_feedback(
+                    prev=last_step_str, curr=step, eq=equation
+                )
 
             prev = current
+            last_step_str = step
 
         except Exception as e:
             return i, f"Invalid expression ({type(e).__name__}): {e}"
@@ -207,5 +327,5 @@ def validate_steps(student_steps, equation):
     if found_solution_line:
         return -1, expert_all_correct_feedback()
 
-    pct = _progress_percent(prev)
+    pct = _progress_percent()
     return -2, expert_progress_feedback(pct)

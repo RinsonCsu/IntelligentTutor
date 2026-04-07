@@ -227,20 +227,6 @@ def astar_next_step_factor_quadratic(equation, max_expansions=400):
     lhs, rhs = equation.split("=")
     start_eq = sp.Eq(_parse(lhs), _parse(rhs))
 
-    def _looks_split_middle_term_text(eq_text: str):
-        t = eq_text.replace(" ", "")
-        if "=" not in t:
-            return False
-        lhs_txt = t.split("=")[0]
-        if "x**2" not in lhs_txt and "x^2" not in lhs_txt:
-            return False
-        # Split forms typically contain at least one explicit '*x' term plus another linear x term.
-        if "*x" not in lhs_txt:
-            return False
-        # Count linear x occurrences after removing the quadratic token.
-        lhs_no_x2 = lhs_txt.replace("x**2", "").replace("x^2", "")
-        return lhs_no_x2.count("x") >= 2
-
     def _canonical(eq):
         return sp.srepr(eq.lhs), sp.srepr(eq.rhs)
 
@@ -257,14 +243,12 @@ def astar_next_step_factor_quadratic(equation, max_expansions=400):
     if _as_poly0(start_eq) is None:
         return None
 
-    # If the student already typed the split-middle-term form, SymPy will typically recombine it on parse,
-    # causing A* to repeat the split hint. Detect this from the raw text and advance to factoring.
     try:
-        if _looks_split_middle_term_text(equation) and sp.simplify(start_eq.rhs) == 0:
-            expr0 = sp.expand(start_eq.lhs)
-            factored = sp.factor(expr0)
-            if factored != sp.simplify(expr0):
-                return f"{sp.sstr(factored)} = 0"
+        if sp.simplify(start_eq.rhs) == 0:
+            from expert_system import infer_expert_next_step as _expert_next
+            expert_result = _expert_next(equation)
+            if expert_result is not None:
+                return expert_result[0]
     except Exception:
         pass
 

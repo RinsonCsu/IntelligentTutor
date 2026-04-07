@@ -7,6 +7,15 @@ from sympy.parsing.sympy_parser import (
 )
 
 
+def _model_label(prev_step: str, curr_step: str, equation: str) -> str:
+    try:
+        from model import classify_error_from_steps
+        _, label, _ = classify_error_from_steps(prev_step, curr_step, equation)
+        return label
+    except Exception:
+        return None
+
+
 x = sp.symbols("x")
 transformations = standard_transformations + (convert_xor, implicit_multiplication_application,)
 
@@ -31,10 +40,10 @@ def _eq_to_text(eq: sp.Eq):
     return f"{sp.sstr(eq.lhs)} = {sp.sstr(eq.rhs)}"
 
 
-def _is_trivial_same_hint(before: sp.Eq, after: sp.Eq):
+def _is_trivial_same_hint(eq_before: sp.Eq, eq_after: sp.Eq):
     try:
-        b = sp.simplify(before.lhs - before.rhs)
-        a = sp.simplify(after.lhs - after.rhs)
+        b = sp.simplify(eq_before.lhs - eq_before.rhs)
+        a = sp.simplify(eq_after.lhs - eq_after.rhs)
     except Exception:
         return True
     if sp.simplify(b - a) == 0:
@@ -45,6 +54,35 @@ def _is_trivial_same_hint(before: sp.Eq, after: sp.Eq):
 
 
 def infer_expert_next_step(equation_text: str):
+    # handle "x+p=0 or x+q=0" by solving each part
+    if " or " in equation_text.lower():
+        import re as _re_or
+        parts = _re_or.split(r'\bor\b', equation_text, flags=_re_or.IGNORECASE)
+        solutions = []
+        valid = True
+        for part in parts:
+            sub_eq = _parse_eq(part.strip())
+            if sub_eq is None:
+                valid = False
+                break
+            sols = sp.solve(sub_eq, x)
+            if not sols:
+                valid = False
+                break
+            solutions.append(sols[0])
+        if valid and solutions:
+            already_solved = all(
+                _re_or.match(r'\s*x\s*=\s*[+-]?\d', p.strip())
+                for p in parts
+            )
+            if not already_solved:
+                sol_parts = [f"x = {sp.sstr(s)}" for s in solutions]
+                return (
+                    " or ".join(sol_parts),
+                    "Solve each equation to find x.",
+                )
+        return None
+
     eq = _parse_eq(equation_text)
     if eq is None:
         return None
@@ -62,31 +100,92 @@ def infer_expert_next_step(equation_text: str):
                 return None
             return (
                 _eq_to_text(nxt),
-                "Rule: STANDARD_FORM. Move everything to one side to get = 0.",
+                "Move everything to one side so the equation equals zero.",
             )
+
+        import re as _re
+        lhs_str = equation_text.split("=")[0]
+
+        grp = _re.search(
+            r'x\s*\*?\s*\(([^)]+)\)\s*([+-])\s*(\d+)\s*\*?\s*\(([^)]+)\)',
+            lhs_str
+        )
+        if grp:
+            inner1 = grp.group(1).strip()
+            sign   = grp.group(2)
+            n_str  = grp.group(3).strip()
+            inner2 = grp.group(4).strip()
+            if inner1 == inner2:
+                try:
+                    inner_expr = _parse(inner1)
+                    n_val      = _parse(sign + n_str)
+                    factored = sp.Eq(sp.Mul(x + n_val, inner_expr, evaluate=False), 0)
+                    return (
+                        _eq_to_text(factored),
+                        "Factor out the common bracket to write as a product.",
+                    )
+                except Exception:
+                    pass
+
+        fct = _re.search(r'\(([^)]+)\)\s*\*?\s*\(([^)]+)\)', lhs_str)
+        if fct:
+            try:
+                f1 = _parse(fct.group(1))
+                f2 = _parse(fct.group(2))
+                r1 = sp.solve(f1, x)
+                r2 = sp.solve(f2, x)
+                if r1 and r2:
+                    def _root_eq(r):
+                        c = -r
+                        if c > 0:   return f"x + {c} = 0"
+                        elif c < 0: return f"x - {-c} = 0"
+                        else:       return "x = 0"
+                    hint = f"{_root_eq(r1[0])} or {_root_eq(r2[0])}"
+                    return (hint, "If A×B=0 then A=0 or B=0 — set each factor equal to zero.")
+            except Exception:
+                pass
 
         a, b, c = poly.all_coeffs()
         if isinstance(a, sp.Integer) and isinstance(b, sp.Integer) and isinstance(c, sp.Integer):
-            ac = int(a * c)
+            ac    = int(a * c)
+            b_int = int(b)
             if ac != 0:
-                candidates = []
+                pair = None
                 for d in range(1, abs(ac) + 1):
-                    if ac % d != 0:
-                        continue
-                    candidates.append(d)
-                    candidates.append(-d)
-                for m_int in candidates:
-                    n_int = ac // m_int
-                    if m_int + n_int == int(b):
+                    if ac % d == 0:
+                        for sign in (1, -1):
+                            m_int = sign * d
+                            n_int = ac // m_int
+                            if m_int + n_int == b_int:
+                                pair = (m_int, n_int)
+                                break
+                    if pair:
+                        break
+
+                if pair:
+                    m_int, n_int = pair
+                    lhs_no_sq = _re.sub(r'x\s*(\*\*|[\^])\s*2', '', lhs_str)
+                    linear_x_count = len(_re.findall(r'x', lhs_no_sq))
+                    if linear_x_count >= 2:
+                        m_a = sp.Rational(m_int, int(a))
+                        n_a = sp.Rational(n_int, int(a))
+                        inner = x + m_a
+                        grouped = sp.Eq(
+                            sp.Mul(x, inner, evaluate=False) + sp.Mul(n_a, inner, evaluate=False),
+                            0
+                        )
+                        return (
+                            _eq_to_text(grouped),
+                            "Group the first two and last two terms, then factor each group.",
+                        )
+                    else:
                         m = sp.Integer(m_int)
                         n = sp.Integer(n_int)
                         split_expr = sp.Add(a * x**2, m * x, n * x, c, evaluate=False)
                         nxt = sp.Eq(split_expr, 0)
-                        if _is_trivial_same_hint(eq, nxt):
-                            return None
                         return (
                             _eq_to_text(nxt),
-                            "Rule: SPLIT_MIDDLE_TERM. Rewrite bx as mx + nx to factor by grouping.",
+                            "Rewrite the middle term as two terms so you can factor by grouping.",
                         )
 
         return None
@@ -105,100 +204,33 @@ def infer_expert_next_step(equation_text: str):
     if sp.simplify(eq.lhs - eq.rhs) == 0:
         return None
 
-    if lhs_p.degree() == 1 and rhs_p.degree() == 0:
-        a = sp.simplify(lhs_p.coeffs()[0])
-        b = sp.simplify(lhs_p.TC())
-        if b != 0:
-            nxt = sp.Eq(sp.expand(eq.lhs - b), sp.expand(eq.rhs - b))
-            if _is_trivial_same_hint(eq, nxt):
-                return None
-            return (
-                _eq_to_text(nxt),
-                "Rule: MOVE_CONSTANT. Subtract the constant term from both sides.",
-            )
-        if a != 0 and sp.simplify(a - 1) != 0:
-            nxt = sp.Eq(sp.expand(eq.lhs / a), sp.expand(eq.rhs / a))
-            if _is_trivial_same_hint(eq, nxt):
-                return None
-            return (
-                _eq_to_text(nxt),
-                "Rule: DIVIDE_COEFFICIENT. Divide both sides by the coefficient of x.",
-            )
+    a_l = lhs_p.coeffs()[0] if lhs_p.degree() == 1 else sp.Integer(0)
+    a_r = rhs_p.coeffs()[0] if rhs_p.degree() == 1 else sp.Integer(0)
+    b_l = lhs_p.TC()
+    b_r = rhs_p.TC()
 
-    if rhs_p.degree() == 1 and lhs_p.degree() == 0:
-        a = sp.simplify(rhs_p.coeffs()[0])
-        b = sp.simplify(rhs_p.TC())
-        if b != 0:
-            nxt = sp.Eq(sp.expand(eq.lhs - b), sp.expand(eq.rhs - b))
-            if _is_trivial_same_hint(eq, nxt):
-                return None
-            return (
-                _eq_to_text(nxt),
-                "Rule: MOVE_CONSTANT. Subtract the constant term from both sides.",
-            )
-        if a != 0 and sp.simplify(a - 1) != 0:
-            nxt = sp.Eq(sp.expand(eq.lhs / a), sp.expand(eq.rhs / a))
-            if _is_trivial_same_hint(eq, nxt):
-                return None
-            return (
-                _eq_to_text(nxt),
-                "Rule: DIVIDE_COEFFICIENT. Divide both sides by the coefficient of x.",
-            )
+    if a_l != 0 and a_r != 0:
+        net_a = sp.simplify(a_l - a_r)
+        net_b = sp.simplify(b_l - b_r)
+        if net_b != 0:
+            nxt = sp.Eq(net_a * x + net_b, sp.Integer(0))
+        else:
+            nxt = sp.Eq(net_a * x, sp.Integer(0))
+        return (_eq_to_text(nxt), "Subtract the x terms from both sides to get x on one side.")
 
-    return None
+    if a_r != 0 and a_l == 0:
+        eq = sp.Eq(eq.rhs, eq.lhs)
+        a_l, a_r = a_r, a_l
+        b_l, b_r = b_r, b_l
 
+    if b_l != 0:
+        nxt = sp.Eq(a_l * x, sp.expand(b_r - b_l))
+        return (_eq_to_text(nxt), "Move the constant to the other side to isolate x.")
 
-def diagnose_step_error(equation_text: str, prev_step_text: str, current_step_text: str, validator_message: str):
-    original = _parse_eq(equation_text)
-    prev_eq = _parse_eq(prev_step_text)
-    cur_eq = _parse_eq(current_step_text)
-
-    if validator_message.startswith("Missing '") or "Missing '=" in validator_message:
-        return ("Invalid", "Rule: MISSING_EQUALS. Each step must contain exactly one '='.")
-
-    if original is None or prev_eq is None or cur_eq is None:
-        return None
-
-    if validator_message == "Not equivalent transformation":
-        if sp.simplify(prev_eq.lhs - cur_eq.lhs) == 0 and sp.simplify(prev_eq.rhs - cur_eq.rhs) != 0:
-            return (
-                "Algebraic Error",
-                "Rule: BALANCE_ERROR. You changed only one side of the equation; do the same operation to both sides.",
-            )
-        if sp.simplify(prev_eq.rhs - cur_eq.rhs) == 0 and sp.simplify(prev_eq.lhs - cur_eq.lhs) != 0:
-            return (
-                "Algebraic Error",
-                "Rule: BALANCE_ERROR. You changed only one side of the equation; do the same operation to both sides.",
-            )
-        try:
-            prev_expr = sp.simplify(prev_eq.lhs - prev_eq.rhs)
-            cur_expr = sp.simplify(cur_eq.lhs - cur_eq.rhs)
-        except Exception:
-            prev_expr = None
-            cur_expr = None
-        if prev_expr is not None and cur_expr is not None:
-            if sp.simplify(prev_expr + cur_expr) == 0:
-                return (
-                    "Sign Error",
-                    "Rule: SIGN_FLIP. It looks like the whole equation was multiplied by -1 unintentionally.",
-                )
-
-        return (
-            "Algebraic Error",
-            "Rule: NOT_EQUIVALENT. This step is not algebraically equivalent to the previous one.",
-        )
-
-    if validator_message == "Incorrect solution":
-        return (
-            "Arithmetic Error",
-            "Rule: CHECK_SOLUTION. Substitute your value back into the original equation to verify it.",
-        )
-
-    if validator_message.startswith("Invalid expression"):
-        return (
-            "Invalid",
-            "Rule: PARSE_ERROR. The expression could not be parsed; check parentheses, operators, and syntax.",
-        )
+    if sp.simplify(a_l - 1) != 0 and sp.simplify(a_l + 1) != 0:
+        val = sp.Rational(b_r, a_l)
+        nxt = sp.Eq(x, val)
+        return (_eq_to_text(nxt), "Divide both sides by the coefficient of x.")
 
     return None
 
@@ -210,19 +242,21 @@ def expert_solution_format_feedback(rhs_texts):
 
 
 def expert_missing_equals_feedback():
-    return "Rule: MISSING_EQUALS. Each step must contain exactly one '='."
+    return "Format: missing '=' — each step needs exactly one"
 
 
 def expert_multiple_equals_feedback():
-    return "Rule: MULTIPLE_EQUALS. Invalid expression; each step should have exactly one '='."
+    return "Format: too many '=' signs — each step should have exactly one"
 
 
-def expert_incorrect_solution_feedback():
-    return "Rule: CHECK_SOLUTION. Incorrect solution; substitute your value back into the original equation to verify."
+def expert_incorrect_solution_feedback(prev="", curr="", eq="") -> str:
+    label = _model_label(prev, curr, eq) if prev and curr and eq else None
+    return label or "Arithmetic Error"
 
 
-def expert_not_equivalent_feedback():
-    return "Rule: NOT_EQUIVALENT. This step is not algebraically equivalent to the previous one."
+def expert_not_equivalent_feedback(prev="", curr="", eq="") -> str:
+    label = _model_label(prev, curr, eq) if prev and curr and eq else None
+    return label or "Algebraic Error"
 
 
 def expert_progress_feedback(pct):
@@ -238,6 +272,10 @@ def expert_all_correct_feedback():
 def expert_is_acceptable_final_answer(s):
     import re
     s = s.strip().replace(" ", "")
+    if re.fullmatch(r"[+-]?\d+", s):
+        return True
+    if re.fullmatch(r"[+-]?\d+\.\d+", s):
+        return True
     m = re.fullmatch(r"([+-]?\d+)/([+-]?\d+)", s)
     if m:
         num = int(m.group(1))
@@ -245,6 +283,29 @@ def expert_is_acceptable_final_answer(s):
         if den == 0:
             return False
         return abs(num) < abs(den)
-    if re.fullmatch(r"[+-]?\d+\.\d{2,}", s):
-        return True
     return False
+
+
+def count_steps_remaining(equation_text: str, max_iter: int = 10) -> int | None:
+    current = equation_text.strip()
+    total = 0
+    for _ in range(max_iter):
+        result = infer_expert_next_step(current)
+        if result is None:
+            return total
+        next_eq, rule = result
+        if "DIVIDE_COEFFICIENT" in rule:
+            cur_eq = _parse_eq(current)
+            if cur_eq is not None:
+                try:
+                    lp = sp.Poly(cur_eq.lhs, x)
+                    rp = sp.Poly(cur_eq.rhs, x)
+                    a = lp.coeffs()[0] if lp.degree() == 1 else rp.coeffs()[0]
+                    b = rp.TC() if lp.degree() == 1 else lp.TC()
+                    if sp.simplify(sp.Rational(b, a)).q != 1:
+                        total += 1
+                except Exception:
+                    pass
+        total += 1
+        current = next_eq
+    return total
